@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>桌面 AI 机器人 · Bridge</title>
+  <link rel="stylesheet" href="/assets/style.css?v=19">
+</head>
+<body>
+  <section id="login" class="login-screen">
+    <div class="login-card">
+      <div class="brand-mark" aria-hidden="true">✦</div>
+      <p class="eyebrow">DESKTOP AI ROBOT</p>
+      <h1>连接你的 Bridge</h1>
+      <p class="muted">网页通过本机 Bridge 连接对话目标。发给 Hermes 的文字会交由 Hermes 处理。请输入本机访问密钥继续。</p>
+      <form id="login-form" class="stack-form">
+        <label for="key">访问密钥</label>
+        <input id="key" type="password" autocomplete="off" required placeholder="粘贴本机访问密钥">
+        <button type="submit" class="primary-button">进入对话</button>
+      </form>
+      <p id="login-error" class="form-error" role="alert"></p>
+    </div>
+  </section>
+
+  <div id="workspace" class="app-shell" hidden>
+    <button id="sidebar-backdrop" class="sidebar-backdrop" type="button" aria-label="关闭侧栏" tabindex="-1" hidden></button>
+    <aside id="sidebar" class="sidebar" aria-label="对话设置与设备" aria-hidden="true" inert>
+      <div class="sidebar-top">
+        <div class="brand-line"><span class="brand-mark small" aria-hidden="true">✦</span><div><strong>桌面 AI 机器人</strong><small>本机 Bridge</small></div><button type="button" id="sidebar-close" class="sidebar-close" aria-label="关闭侧栏" title="关闭侧栏">×</button></div>
+      </div>
+      <div class="target-card">
+        <label for="source">对话目标</label>
+        <select id="source">
+          <option value="hermes">Hermes</option>
+          <option value="deepseek_harness">DeepSeek Harness</option>
+          <option value="doubao_web">豆包 PPT 网页</option>
+        </select>
+      </div>
+
+      <section id="approval-panel" class="approval-panel" aria-live="polite" hidden>
+        <h2>Hermes 请求工具审批</h2>
+        <p id="approval-description"></p>
+        <p class="approval-label">请核对将执行的命令</p>
+        <pre id="approval-command"></pre>
+        <div class="approval-actions">
+          <button type="button" id="approval-deny" class="secondary-button">拒绝</button>
+          <button type="button" id="approval-once" class="primary-button">仅同意本次</button>
+        </div>
+        <p id="approval-error" class="form-error" role="alert"></p>
+      </section>
+
+      <details class="tools-panel session-panel" id="session-panel" open>
+        <summary><span>会话</span><span aria-hidden="true">⌄</span></summary>
+        <div id="session-groups" class="session-groups"></div>
+        <p id="session-status" class="session-status" role="status" aria-live="polite"></p>
+        <p id="session-error" class="form-error" role="alert"></p>
+      </details>
+
+      <div class="sidebar-bottom">
+        <span>手机端仅使用文字输入</span>
+        <button type="button" id="logout" class="text-button">退出登录</button>
+      </div>
+    </aside>
+
+    <main class="conversation">
+      <header class="chat-header">
+        <div id="sidebar-toggle" class="chat-target-heading" role="button" tabindex="0" aria-expanded="false" aria-controls="sidebar" aria-label="打开对话与设备侧栏" title="点击打开对话与设备侧栏">
+          <span class="brand-mark small" aria-hidden="true">✦</span>
+          <div class="chat-heading"><h2 id="conversation-title">Hermes</h2><p id="connection-state">正在连接…</p></div>
+        </div>
+        <div class="device-audio-group">
+          <div class="device-status-row">
+            <button type="button" id="volume-toggle" class="audio-icon-button" aria-label="调节机器人音量" title="调节机器人音量" aria-expanded="false" aria-controls="audio-panel">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16M9 4v6M15 14v6"/></svg>
+            </button>
+            <button type="button" id="voice-tools-toggle" class="audio-icon-button" aria-label="语音工具" title="语音工具" aria-expanded="false" aria-controls="voice-tools-panel">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3ZM6 11v1a6 6 0 0 0 12 0v-1M12 18v3M8 21h8"/></svg>
+            </button>
+            <span id="device" class="device-pill">检查设备中</span>
+          </div>
+          <section id="voice-tools-panel" class="audio-controls" aria-label="语音工具" hidden>
+            <div class="tools-content voice-tools-content">
+              <label for="voice-select">回复声线</label>
+              <select id="voice-select">
+                <option value="kokoro">Kokoro 中文女声</option>
+                <option value="paimon" disabled>派蒙</option>
+              </select>
+              <form id="tts-form" class="stack-form">
+                <label for="speak-text">测试语音</label>
+                <input id="speak-text" maxlength="300" value="你好，我是桌面机器人。">
+                <button type="submit" class="secondary-button">播放测试语音</button>
+              </form>
+              <p id="tts-error" class="form-error" role="alert"></p>
+            </div>
+          </section>
+          <section id="audio-panel" class="audio-controls" aria-label="机器人音量" hidden>
+            <div class="audio-controls-title"><label for="speaker-volume">机器人音量</label><output id="volume-value" for="speaker-volume">100%</output></div>
+            <div class="volume-slider-row">
+              <button type="button" id="mute-output" class="audio-icon-button" aria-label="一键静音" title="一键静音" aria-pressed="false">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4Z"/><path class="speaker-waves" d="M15 8a6 6 0 0 1 0 8M18 5a10 10 0 0 1 0 14"/><path class="speaker-slash" d="m15 9 6 6m0-6-6 6"/></svg>
+              </button>
+              <input id="speaker-volume" type="range" min="0" max="100" step="1" value="100">
+            </div>
+            <p id="audio-output-note" class="muted" role="status">100% 为当前已确认的音量上限。</p>
+            <p id="audio-output-error" class="form-error" role="alert"></p>
+          </section>
+        </div>
+      </header>
+
+      <div id="messages" class="timeline" role="log" aria-label="对话消息" aria-live="polite" aria-relevant="additions text"></div>
+
+      <div class="composer-dock">
+        <form id="composer" class="composer">
+          <label class="visually-hidden" for="prompt">输入消息</label>
+          <textarea id="prompt" rows="3" maxlength="4000" placeholder="给 Hermes 发消息…"></textarea>
+          <div class="composer-actions">
+            <button type="submit" class="primary-button send-button">发送 <span aria-hidden="true">↗</span></button>
+          </div>
+        </form>
+        <p id="playback-status" class="playback-status" role="status" aria-live="polite"></p>
+        <p id="send-error" class="form-error" role="alert"></p>
+      </div>
+    </main>
+  </div>
+  <script src="/assets/app.js?v=23" defer></script>
+</body>
+</html>
