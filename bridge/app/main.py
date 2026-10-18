@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import subprocess
+import sqlite3
 from pathlib import Path
 from urllib.parse import urlparse
 from contextlib import asynccontextmanager
@@ -23,7 +24,7 @@ from .hermes_api import HermesRunsClient
 from .security import (SESSION_SECONDS, Sessions, anchor_path, load_or_create_token,
                        record_or_verify_data_dir, resolve_data_dir)
 from .speech import SpeechWorker
-from .storage import add_message, initialize, list_messages, set_delivery
+from .storage import add_message, initialize, list_messages, set_delivery, get_setting, set_setting
 from .tts import (SynthesisCancelled, set_selected_voice, synthesize_chunks,
                   start_paimon_service, stop_paimon_service, voice_status,
                   warm_voice)
@@ -47,6 +48,12 @@ class MessageBody(BaseModel):
     text: str = Field(min_length=1, max_length=4000)
     new_session: bool = False
     session_id: str | None = Field(default=None, min_length=1, max_length=256)
+
+
+class StopAnswerBody(BaseModel):
+    source: str
+    session_id: str | None = Field(default=None, min_length=1, max_length=256)
+    message_id: int = Field(gt=0, strict=True)
 
 
 class ConversationBody(BaseModel):
@@ -78,6 +85,10 @@ class VoiceBody(BaseModel):
 
 class AnimationBody(BaseModel):
     enabled: bool
+
+
+class DisplayThemeBody(BaseModel):
+    theme: str
 
 
 class AudioOutputBody(BaseModel):
@@ -118,6 +129,7 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
     audio_output = AudioOutput(data_dir)
     device = DeviceLink(speech.enqueue, lambda generation: voice.on_listen_start(generation),
                         audio_output=audio_output, on_disconnect=lambda: voice.on_device_disconnect())
+    device.set_theme(1 if get_setting(database, 'display_theme') == 'qiuqiu' else 0)
     voice = VoiceConversation(database, data_dir, device, hermes, audio_output=audio_output,
                               workers={"hermes": hermes, "deepseek_harness": harness},
                               validate_target=conversations.resolve)
@@ -277,6 +289,15 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
             device.stop_playback()
         return settings
 
+    @app.post('/api/device/theme', dependencies=[Depends(require_session)])
+    def set_display_theme(body: DisplayThemeBody, request: Request) -> dict:
+        check_origin(request)
+        if body.theme not in ('original', 'qiuqiu'):
+            raise HTTPException(status_code=422, detail='Unknown display theme')
+        set_setting(database, 'display_theme', body.theme)
+        device.set_theme(1 if body.theme == 'qiuqiu' else 0)
+        return {'theme': body.theme, 'queued': True}
+
     @app.post("/api/device/animation", dependencies=[Depends(require_session)])
     def set_animation(body: AnimationBody, request: Request) -> dict:
         check_origin(request)
@@ -412,6 +433,28 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
                 session_id, result.get('native_session_id')} and target.get('session_id'):
             voice.set_target(source, None)
         return result
+
+    @app.get("/api/tasks", dependencies=[Depends(require_session)])
+    def answer_tasks(source: str, session_id: str | None = None) -> dict:
+        if source not in SOURCES:
+            raise HTTPException(status_code=400, detail="Unknown source")
+        worker = {"hermes": hermes, "deepseek_harness": harness}.get(source)
+        return {"items": worker.progress_snapshot(session_id) if worker and hasattr(worker, 'progress_snapshot') else []}
+
+    @app.post("/api/messages/stop", dependencies=[Depends(require_session)])
+    def stop_answer(body: StopAnswerBody, request: Request) -> dict:
+        check_origin(request)
+        worker = {"hermes": hermes, "deepseek_harness": harness}.get(body.source)
+        if not worker:
+            raise HTTPException(status_code=400, detail="此智能体不支持停止回答")
+        with sqlite3.connect(database) as db:
+            row = db.execute('SELECT source,conversation_id,role FROM messages WHERE id=?', (body.message_id,)).fetchone()
+        if not row or tuple(row) != (body.source, body.session_id, 'user'):
+            raise HTTPException(status_code=404, detail="当前会话中找不到这条请求")
+        accepted = worker.cancel(body.message_id)
+        if accepted:
+            voice.on_answer_cancelled(body.message_id, body.source)
+        return {"accepted": bool(accepted), "message_id": body.message_id}
 
     @app.get("/api/messages", dependencies=[Depends(require_session)])
     def messages(source: str, session_id: str | None = None) -> dict:

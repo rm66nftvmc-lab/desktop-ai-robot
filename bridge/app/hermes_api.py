@@ -100,6 +100,45 @@ class HermesRunsClient:
         self._validate_run_id(run_id)
         self._request("POST", f"/v1/runs/{run_id}/stop", {})
 
+    def follow_text(self, run_id, publish, stopped):
+        self._validate_run_id(run_id)
+        cursor = -1
+        text = ''
+        while not stopped.is_set():
+            try:
+                key = self.key_file.read_text(encoding='utf-8').strip()
+            except OSError:
+                return  # Optional preview must not interfere with final polling.
+            req = urllib.request.Request(self.base_url + f'/v1/runs/{run_id}/events', headers={
+                'Authorization': f'Bearer {key}', 'Accept': 'text/event-stream', 'Last-Event-ID': str(cursor)})
+            try:
+                with self._opener.open(req, timeout=2) as response:
+                    data = []
+                    for raw in response:
+                        if stopped.is_set():
+                            return
+                        line = raw.decode('utf-8').rstrip('\r\n')
+                        if line.startswith('data:'):
+                            data.append(line[5:].lstrip())
+                        elif not line and data:
+                            event = json.loads('\n'.join(data))
+                            data = []
+                            seq = event.get('seq')
+                            if isinstance(seq, int):
+                                if seq <= cursor:
+                                    continue
+                                cursor = seq
+                            if event.get('event') == 'replay.truncated':
+                                text = ''
+                            elif event.get('event') == 'message.delta' and isinstance(event.get('delta'), str):
+                                text = (text + event['delta'])[:200000]
+                                publish(text)
+                return
+            except urllib.error.HTTPError:
+                return  # Polling still delivers the authoritative final result.
+            except (OSError, ValueError, TimeoutError):
+                stopped.wait(.3)  # Read-only replay, never another model request.
+
     @staticmethod
     def _validate_run_id(run_id: str) -> None:
         if not RUN_ID.fullmatch(run_id):

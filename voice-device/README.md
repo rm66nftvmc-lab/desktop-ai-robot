@@ -175,3 +175,8 @@ cd D:\Codex工作区\desktop-ai-robot
 | `0x0C FACE` | 电脑→设备 | 单字节表情编号，取值见 `faces.h` 的 `FACE_ID_*` |
 
 麦克风 PCM 只经 USB 送到这台电脑，ESP32 不连接 Wi-Fi。
+# 显示主题更新（固件 1.9）
+
+保留原角色，新增本地球球渲染。Bridge 顶栏屏幕图标切换主题，选择存入电脑数据库，USB 重连时重新应用。协议新增 `THEME=14`，一个字节：0 原角色、1 球球；设备 STATUS 的 `display_theme` 回报实际主题。
+
+球球连续绘制目标 30 Hz，实机约 30.3 Hz；整帧预合成后传屏，帧间不清空。录音时暂停动画以优先传输麦克风数据。`scripts/build_qiuqiu.py` 生成纹理，原角色资源不变。球球视觉形象仅限非商业用途，见 [LICENSE 与来源](assets/qiuqiu/README.md)。

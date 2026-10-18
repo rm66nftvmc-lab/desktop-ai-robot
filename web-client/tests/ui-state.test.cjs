@@ -2,6 +2,38 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const ui = require('../ui-state.js');
 
+function answerHarness(request) {
+  const fs = require('node:fs'), vm = require('node:vm');
+  const source = fs.readFileSync(require.resolve('../app.js'), 'utf8');
+  const context = vm.createContext({ source: { value: 'hermes' }, selectedSessions: { hermes:'one', deepseek_harness:'two' },
+    tasksContext:'hermes:one', answerTasks:[], tasksLoading:false, workspace:{hidden:false},
+    document:{visibilityState:'visible'}, request, renderLiveAnswer(){}, refreshMessages:async()=>{}, showLogin(){} });
+  vm.runInContext(source.slice(source.indexOf('function answerContext('), source.indexOf('function renderLiveAnswer(')), context);
+  vm.runInContext(source.slice(source.indexOf('async function refreshTasks('), source.indexOf('$("#stop-answer").addEventListener')), context);
+  return context;
+}
+
+test('stream polling discards late responses after switching AI or conversation', async () => {
+  let finish;
+  const h = answerHarness(() => new Promise(resolve => { finish=resolve; }));
+  const pending = h.refreshTasks();
+  h.source.value='deepseek_harness';
+  finish({items:[{message_id:1,state:'running',text:'wrong session'}]});
+  await pending;
+  assert.equal(h.answerTasks.length,0);
+  assert.equal(h.currentAnswerTask(),null);
+  assert.equal(h.tasksLoading,false);
+});
+
+test('a temporary streaming read failure keeps the scoped stop control available', async () => {
+  const h = answerHarness(async () => { throw Error('network'); });
+  h.answerTasks=[{message_id:7,state:'running',text:'part'}];
+  await h.refreshTasks();
+  assert.equal(h.currentAnswerTask().message_id,7);
+  h.selectedSessions.hermes='another';
+  assert.equal(h.currentAnswerTask(),null);
+});
+
 function playerHarness(request) {
   const fs = require('node:fs'), vm = require('node:vm');
   const source = fs.readFileSync(require.resolve('../app.js'), 'utf8');

@@ -76,6 +76,26 @@ class DeviceLink:
         }
         self._pending_face: int | None = None
         self._pending_animation: bool | None = None
+        self._desired_theme = 0
+        self._pending_theme = 0
+        self._state['display_theme'] = None
+        self._state['desired_theme'] = 0
+
+    def set_theme(self, theme: int) -> None:
+        if type(theme) is not int or theme not in (0, 1):
+            raise ValueError('Unknown display theme')
+        with self._lock:
+            self._desired_theme = self._pending_theme = theme
+            self._state['desired_theme'] = theme
+
+    def _send_pending_theme(self, port, sequence: int) -> int:
+        with self._lock:
+            theme = self._pending_theme
+            if theme is None or not self._state['connected']:
+                return sequence
+            self._pending_theme = None
+        port.write(protocol.encode(protocol.THEME, sequence, bytes([theme])))
+        return (sequence + 1) & 0xFFFF
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -236,6 +256,8 @@ class DeviceLink:
                 self._connection_lost()
             self._update(connected=True, firmware=hello.get("firmware"), last_error=None)
             self.set_face(faces.READY)
+            with self._lock:
+                self._pending_theme = self._desired_theme
             port.write(protocol.encode(protocol.WELCOME, sequence, b'{"protocol":1}'))
             return (sequence + 1) & 0xFFFF
         if frame.kind == protocol.STATUS:
@@ -261,6 +283,7 @@ class DeviceLink:
                 screen_presents=status.get("presents"),
                 screen_source_updates=status.get("source_updates"),
                 screen_cached_frames=status.get("cached_frames"),
+                display_theme=status.get('display_theme'),
             )
         elif frame.kind == protocol.BUTTON and frame.payload:
             listening = frame.payload[0] == 1
@@ -329,6 +352,7 @@ class DeviceLink:
                     while not self._stop.is_set():
                         now = time.monotonic()
                         sequence = self._send_pending_face(port, sequence)
+                        sequence = self._send_pending_theme(port, sequence)
                         sequence = self._send_pending_animation(port, sequence)
                         if now >= next_heartbeat:
                             port.write(protocol.encode(protocol.HEARTBEAT, sequence))

@@ -2,6 +2,8 @@
 
 当前工作状态与后续事项见 [PROJECT_STATUS.md](PROJECT_STATUS.md)；新机器部署、数据目录恢复和排错见 [docs/SETUP.md](docs/SETUP.md)。
 
+**2026-10-18 · Bridge 0.3.0**：新增 AI 回复逐步显示、停止回答及球球屏幕主题。设备状态旁的屏幕图标可切换原角色/球球，原素材完整保留；球球实测约 30 帧/秒。球球视觉参考 sam70361/aora-bot，仅供个人非商业学习使用，详见 [素材许可说明](voice-device/assets/qiuqiu/README.md)。
+
 **2026-10-17 晚 · 硬件实测 + 完整性修复**：设备 `COM9` / `voice-device-1.8` / CRC 0 / 64 帧 PSRAM 缓存已在线确认；派蒙与 Kokoro 均经机器喇叭实际播放并收到全部下行回执。Bridge 真实数据目录此前被 Codex 的 `LOCALAPPDATA` 重定向分叉（锚点指向空库），已整体迁回 `%LOCALAPPDATA%\DesktopAiRobot` 并保持六位密钥 `<本机访问密钥>` 不变。缺失的 Harness 永久删除插件已按 MIT 附带进 `plugins/dsh-plugin-session-delete`，新增离线安装脚本 `scripts/install_dsh_plugin.ps1`；用一个一次性 Harness 会话验证了"建会话 → 回答 `bridge-ok` → 永久删除"闭环。新增 `scripts/start_bridge.ps1` 固定数据目录启动/重启。测试 **98 passed**。本轮还从主机端验证了 Tailscale Serve 的 HTTPS 登录与安全 Cookie、中文 TTS→Whisper 转写回环、两个本地草稿的批量删除，以及设备物理按键录音被 Whisper 正确转写；那次 Hermes 因目标会话正忙返回 409（新建临时 Hermes 会话问答与删除均成功），现在 409 会显示 Gateway 的错误码与说明。仍需用户实测：会话空闲时完整走一遍"按键→回复→朗读"、手机实体页面、多个原生会话的批量删除。
 
 三个目录各司其职：

@@ -8,6 +8,7 @@ import re
 import socket
 import subprocess
 import time
+import threading
 import urllib.error
 import urllib.request
 import uuid
@@ -18,8 +19,24 @@ import yaml
 
 from .hermes import HermesWorker
 from .storage import get_setting, deleted_session_ids
+from .answer_stream import HarnessTextStream, CancellationUnconfirmed
 
 BASE = "http://127.0.0.1:3081"
+
+
+def request_turn(records, request_id, baseline):
+    active = False
+    ended = False
+    for record in records:
+        event = record.get('event', {})
+        if event.get('seq', -1) <= baseline:
+            continue
+        data = event.get('data', {})
+        if event.get('type') == 'user/message' and data.get('source', {}).get('kind', 'user') == 'user':
+            active = data.get('source', {}).get('rpcId') == request_id
+        elif event.get('type') == 'turn/end' and active:
+            active, ended = False, True
+    return active, ended
 
 
 def completed_reply(records, request_id, baseline):
@@ -158,6 +175,41 @@ class HarnessClient:
             self._login()
             return self._opener.open(request, timeout=20)
 
+    def follow_text(self, session, request_id, baseline, publish, stopped):
+        from websockets.sync.client import connect
+        while not stopped.is_set():
+            try:
+                with self._lock:
+                    if self._opener is None:
+                        self._login()
+                    request = urllib.request.Request(BASE + '/')
+                    for handler in self._opener.handlers:
+                        if isinstance(handler, urllib.request.HTTPCookieProcessor):
+                            handler.cookiejar.add_cookie_header(request)
+                    cookie = request.get_header('Cookie', '')
+                parser = HarnessTextStream(request_id, baseline, publish)
+                with connect('ws://127.0.0.1:3081/api/remote.mux', origin=BASE,
+                             additional_headers={'Cookie': cookie}, proxy=None,
+                             open_timeout=3, close_timeout=.2, max_size=8*1024*1024) as connection:
+                    identity = uuid.uuid4().hex
+                    connection.send(json.dumps({'type': 'open', 'streamId': identity, 'endpoint': 'session/follow',
+                        'payload': {'args': {'request': {'address': {'kind': 'session', 'sessionId': session},
+                            'maxMessages': 100, 'assistantStream': True}}}}))
+                    while not stopped.is_set():
+                        try:
+                            message = json.loads(connection.recv(timeout=.5))
+                        except TimeoutError:
+                            continue
+                        if message.get('streamId') != identity:
+                            continue
+                        if message.get('type') == 'item':
+                            parser.accept(message.get('value', {}))
+                        elif message.get('type') in {'end', 'error'}:
+                            return
+            except Exception:
+                # Read-only reconnect: the next opening snapshot reconstructs
+                # text; never replay session/prompt on a stream failure.
+                stopped.wait(.5)
     def _plugin_post(self, path, payload):
         """POST to an authenticated host plugin route using the Harness cookie."""
         with self._lock:
@@ -281,24 +333,64 @@ class HarnessWorker(HermesWorker):
             baseline = -1
         self._last_run_session = session
         request_id = str(uuid.uuid4())
+        with self._lock:
+            message_id = self._current_message_id
+            if message_id in self._cancelled:
+                raise RuntimeError('Harness 请求在发送前已取消')
         self.client.rpc('session/prompt', {'sessionId': session, 'requestId': request_id,
             'content': [{'type': 'text', 'text': text}], 'mode': 'queue',
             'clientTimeZone': 'Asia/Shanghai'})
         deadline = time.monotonic() + 300
-        while time.monotonic() < deadline:
-            with self._lock:
-                cancelled = self._stop.is_set() or self._current_message_id in self._cancelled
-            if cancelled:
-                self.client.rpc('session/cancel', {'sessionId': session})
-                raise RuntimeError('Harness 请求已取消')
-            state = self.client.rpc('session/projections', {'sessionId': session})
-            if state['asOfSeq'] > baseline:
+        stopped = threading.Event()
+        follower = None
+        if hasattr(self.client, 'follow_text'):
+            follower = threading.Thread(target=self.client.follow_text,
+                args=(session, request_id, baseline, lambda value: self._publish(message_id, value), stopped), daemon=True)
+            follower.start()
+        cancel_sent = False
+        terminal = False
+        try:
+            while time.monotonic() < deadline:
+                with self._lock:
+                    cancelled = self._stop.is_set() or message_id in self._cancelled
+                state = self.client.rpc('session/projections', {'sessionId': session})
                 page = self.client.rpc('session/page', {
                     'address': {'kind': 'session', 'sessionId': session},
-                    'throughSeq': state['asOfSeq'], 'maxMessages': 100})
+                    'throughSeq': state['asOfSeq'], 'maxMessages': 100}) if state['asOfSeq'] > baseline else {'records': []}
+                active, terminal = request_turn(page['records'], request_id, baseline)
+                if cancelled and not cancel_sent:
+                    inbox = state.get('values', {}).get('inbox', {})
+                    pending = next((item for kind in ('next-turn', 'next-step') for item in inbox.get(kind, [])
+                                    if item.get('source', {}).get('rpcId') == request_id), None)
+                    if pending:
+                        try:
+                            self.client.rpc('session/updateQueue', {'sessionId': session, 'itemId': pending['id'],
+                                                                   'action': {'kind': 'remove'}})
+                        except RuntimeError as exc:
+                            if 'queue-item-not-found' in str(exc):
+                                continue  # Claimed concurrently: re-read ownership before cancelling.
+                            raise
+                        terminal = True
+                        raise RuntimeError('Harness 排队请求已取消')
+                    if active:
+                        self.client.rpc('session/cancel', {'sessionId': session})
+                        cancel_sent = True
+                    elif terminal:
+                        raise RuntimeError('Harness 请求已结束')
+                if cancelled and terminal:
+                    raise RuntimeError('Harness 请求已停止')
                 answer = completed_reply(page['records'], request_id, baseline)
                 if answer:
                     return answer
-            time.sleep(0.6)
-        self.client.rpc('session/cancel', {'sessionId': session})
-        raise RuntimeError('Harness 回复超时；如有审批，请在 Harness 本地界面处理后重试')
+                time.sleep(.5)
+            raise RuntimeError('Harness 回复超时；请在 Harness 本地界面检查任务状态')
+        except Exception as exc:
+            with self._lock:
+                cancelled = message_id in self._cancelled
+            if cancelled and not terminal:
+                raise CancellationUnconfirmed('未能确认 Harness 已停止，任务可能仍在运行，请在 Harness 中检查') from exc
+            raise
+        finally:
+            stopped.set()
+            if follower:
+                follower.join(timeout=.1)

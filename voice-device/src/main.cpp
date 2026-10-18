@@ -7,12 +7,16 @@
 
 #include "faces.h"
 #include "screen_assets.h"
+#include "qiuqiu_assets.h"
+#include <math.h>
 
 // USB CDC: A5 5A | type | seq LE | length LE | payload | CRC16-CCITT LE.
 static constexpr uint8_t FRAME_STATUS=1, FRAME_DISPLAY=2, FRAME_AUDIO_UP=3, FRAME_AUDIO_DOWN=4;
 static constexpr uint8_t FRAME_HEARTBEAT=5, FRAME_BUTTON=6, FRAME_ACK=8;
 static constexpr uint8_t FRAME_HELLO=9, FRAME_WELCOME=10, FRAME_AUDIO_END=11, FRAME_FACE=12;
 static constexpr uint8_t FRAME_ANIMATION=13;
+static constexpr uint8_t FRAME_THEME=14;
+static uint8_t displayTheme=0;
 static constexpr uint16_t MAX_PAYLOAD=1024;
 static constexpr int KEY_PIN=1, SAMPLE_RATE=16000;
 static constexpr int LCD_CS=8, LCD_DC=9, LCD_RST=10, LCD_MOSI=11, LCD_SCLK=12;
@@ -150,6 +154,61 @@ static void lcdPresentCachedFrame() {
   ++lcdPresents;
 }
 
+// A complete opaque frame is composed before any SPI write. No blank frame.
+// Eyes move continuously at 30 Hz; no repeated GIF poses or runtime allocation.
+static void lcdDrawQiuqiu() {
+  if (!lcdFrameBytes) return;
+  const uint32_t started=micros();
+  const float t=millis()*.001f;
+  for (int y=0;y<192;++y) for (int x=0;x<192;++x) {
+    uint16_t color=pgm_read_word(&QIUQIU_TEXTURE[y*192+x]);
+    // Match the original asset's counterclockwise screen orientation.
+    const int offset=((191-x)*192+y)*2;
+    lcdFrameBytes[offset]=color>>8; lcdFrameBytes[offset+1]=color;
+  }
+  float phase=fmodf(t,4.6f);
+  float blink=phase<.22f ? fabsf(phase-.11f)/.11f : 1.f;
+  if (currentFace==FACE_ID_SLEEP) blink=.12f;
+  const float gazeX=sinf(t*.73f)*3.5f;
+  const float gazeY=sinf(t*1.2f)*1.8f;
+  for (int eye=0;eye<2;++eye) {
+    float cx=(eye?118.f:76.f)+gazeX;
+    float cy=(eye?83.f:91.f)+gazeY;
+    float half=(eye?10.f:13.f)*blink;
+    float radius=eye?4.f:5.f;
+    if (currentFace==FACE_ID_LISTEN) half*=1.2f;
+    if (currentFace==FACE_ID_SPEAK) half*=.8f+.2f*sinf(t*9.f);
+    if (currentFace==FACE_ID_THINK) cy+=sinf(t*3.f+eye)*2.f;
+    if (currentFace==FACE_ID_ERROR) half=4;
+    const float tilt=eye?-.18f:-.25f;
+    for (int y=int(cy-half-radius-7);y<=int(cy+half+radius+7);++y)
+      for (int x=int(cx-radius-10);x<=int(cx+radius+10);++x) {
+        if (x<0||x>=192||y<0||y>=192) continue;
+        float dx=x-cx,dy=y-cy;
+        float u=dx-tilt*dy,v=dy+tilt*dx;
+        float q=fmaxf(0.f,fabsf(v)-half);
+        float coverage=fminf(1.f,fmaxf(0.f,radius+.5f-sqrtf(u*u+q*q)));
+        if (coverage<=0) continue;
+        int offset=((191-x)*192+y)*2;
+        uint16_t bg=(lcdFrameBytes[offset]<<8)|lcdFrameBytes[offset+1];
+        uint16_t fg=currentFace==FACE_ID_ERROR?0x8828:0x2125;
+        int r=((bg>>11)&31)*(1-coverage)+((fg>>11)&31)*coverage;
+        int g=((bg>>5)&63)*(1-coverage)+((fg>>5)&63)*coverage;
+        int b=(bg&31)*(1-coverage)+(fg&31)*coverage;
+        uint16_t color=(r<<11)|(g<<5)|b;
+        lcdFrameBytes[offset]=color>>8; lcdFrameBytes[offset+1]=color;
+      }
+  }
+  lcdComposeUs=micros()-started;
+  lcdCachedLength=192*192*2;
+  ++lcdSourceUpdates;
+  const uint32_t pushStarted=micros();
+  lcdSetWindow(24,64,215,255);
+  lcdBeginPixels(); SPI.writeBytes(lcdFrameBytes,lcdCachedLength); lcdEndPixels();
+  lcdPushUs=micros()-pushStarted;
+  ++lcdPresents; ++currentFaceFrame;
+}
+
 static bool lcdDecodeFrame(const ScreenCompressedFrame &frame,uint8_t *output) {
   size_t inputBytes=frame.size,decoded=LCD_WIDTH*FACE_PIXELS*2;
   tinfl_init(&lcdInflater);
@@ -222,12 +281,20 @@ static void lcdDrawFace(int index) {
   currentFace=index;
   currentFaceFrame=0;
   currentFaceRepeat=0;
-  lcdDrawFaceFrame(currentFace,currentFaceFrame);
+  if (displayTheme==1) lcdDrawQiuqiu();
+  else lcdDrawFaceFrame(currentFace,currentFaceFrame);
   lastFaceFrameAt=millis();
 }
 
 static void lcdTickAnimation() {
   const uint32_t elapsed=millis()-lastFaceFrameAt;
+  if (displayTheme==1) {
+    // Recording keeps the display still to prioritize microphone samples.
+    if (!animationEnabled || listening || elapsed<33) return;
+    lastFaceFrameAt+=elapsed/33*33;
+    lcdDrawQiuqiu();
+    return;
+  }
   if (!animationEnabled || currentFace<0 || elapsed<FACE_REFRESH_INTERVAL_MS) return;
   ScreenFaceFrames face;
   memcpy_P(&face,&SCREEN_FACES[currentFace],sizeof(face));
@@ -312,6 +379,12 @@ static void handleFrame(uint8_t kind,const uint8_t *payload,uint16_t length) {
     connected=true; lastHost=millis(); lcdDrawFace(FACE_ID_READY);
   } else if (kind==FRAME_FACE && connected && length==1) {
     lcdDrawFace(payload[0]);
+  } else if (kind==FRAME_THEME && connected && length==1 && payload[0]<=1) {
+    if (displayTheme!=payload[0]) {
+      displayTheme=payload[0];
+      if (displayTheme==1) lcdFill(0x0843); else lcdDrawBackground();
+      int face=currentFace; currentFace=-1; lcdDrawFace(face);
+    }
   } else if (kind==FRAME_ANIMATION && connected && length==1) {
     animationEnabled=payload[0]!=0;
     lastFaceFrameAt=millis();
@@ -423,18 +496,18 @@ void loop() {
   pollButton();
   if (!connected && millis()-lastHello>=2000) {
     lastHello=millis();
-      sendJson(FRAME_HELLO,"{\"protocol\":1,\"firmware\":\"voice-device-1.8\"}");
+      sendJson(FRAME_HELLO,"{\"protocol\":1,\"firmware\":\"voice-device-1.9\"}");
   }
   if (connected && millis()-lastStatus>=3000) {
     lastStatus=millis();
     char status[512];
-    snprintf(status,sizeof(status),"{\"listening\":%s,\"playing\":%s,\"speaker_ready\":%s,\"face\":%d,\"frame\":%u,\"uptime_ms\":%lu,\"audio_rx\":%lu,\"audio_ack\":%lu,\"bad_crc\":%lu,\"reset_reason\":%d,\"screen_buffer\":%s,\"compose_us\":%lu,\"push_us\":%lu,\"animation_enabled\":%s,\"presents\":%lu,\"source_updates\":%lu,\"cached_frames\":%u}",
+    snprintf(status,sizeof(status),"{\"listening\":%s,\"playing\":%s,\"speaker_ready\":%s,\"face\":%d,\"frame\":%u,\"uptime_ms\":%lu,\"audio_rx\":%lu,\"audio_ack\":%lu,\"bad_crc\":%lu,\"reset_reason\":%d,\"screen_buffer\":%s,\"compose_us\":%lu,\"push_us\":%lu,\"animation_enabled\":%s,\"presents\":%lu,\"source_updates\":%lu,\"cached_frames\":%u,\"display_theme\":%u}",
       listening?"true":"false",playing?"true":"false",speakerReady?"true":"false",currentFace,currentFaceFrame,
       static_cast<unsigned long>(millis()),static_cast<unsigned long>(receivedAudio),
       static_cast<unsigned long>(sentAcks),static_cast<unsigned long>(badCrc),
       static_cast<int>(esp_reset_reason()),lcdFrameBytes?"true":"false",
       static_cast<unsigned long>(lcdComposeUs),static_cast<unsigned long>(lcdPushUs),animationEnabled?"true":"false",
-      static_cast<unsigned long>(lcdPresents),static_cast<unsigned long>(lcdSourceUpdates),lcdCachedFrames);
+      static_cast<unsigned long>(lcdPresents),static_cast<unsigned long>(lcdSourceUpdates),lcdCachedFrames,displayTheme);
     sendJson(FRAME_STATUS,status);
   }
   pollMicrophone();

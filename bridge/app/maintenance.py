@@ -7,7 +7,7 @@ import sqlite3
 import threading
 import time
 
-BRIDGE_VERSION = "0.2.0"
+BRIDGE_VERSION = "0.3.0"
 SCHEMA_VERSION = 1
 LOG_MAX_BYTES = 2 * 1024 * 1024
 LOG_BACKUPS = 3

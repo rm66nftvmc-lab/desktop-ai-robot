@@ -36,6 +36,92 @@ let voiceTargetRevision = 0;
 let lastVoiceTargetKey = "";
 let lastVoiceError = "";
 let statusLoading = false;
+let answerTasks = [];
+let tasksContext = "";
+let tasksLoading = false;
+
+function answerContext() { return `${source.value}:${selectedSessions[source.value] || ""}`; }
+
+function currentAnswerTask() {
+  if (tasksContext !== answerContext()) return null;
+  return answerTasks.find((task) => ["running", "stopping", "queued"].includes(task.state)) || null;
+}
+
+function renderLiveAnswer() {
+  const sameContext = tasksContext === answerContext();
+  const active = sameContext ? currentAnswerTask() : null;
+  const latest = sameContext ? answerTasks.at(-1) : null;
+  const task = active || (latest && ["interrupted", "failed", "stop_failed"].includes(latest.state) ? latest : null);
+  const stop = $("#stop-answer");
+  stop.hidden = !active;
+  stop.disabled = active?.state === "stopping";
+  stop.textContent = stop.disabled ? "正在停止…" : "停止回答";
+  let row = messages.querySelector(".live-answer");
+  // Final native history owns settled replies. Never invent a typing effect.
+  const duplicate = task?.text && [...messages.querySelectorAll(".from-assistant:not(.live-answer) .message-bubble")]
+    .some((bubble) => bubble.textContent === task.text);
+  if (!task || (!active && duplicate) || (!active && !task.text && task.state !== "stop_failed")) {
+    row?.remove();
+    return;
+  }
+  if (row?.dataset.replyTo !== String(task.message_id)) {
+    row?.remove();
+    row = messageNode({ id: `live-${task.message_id}`, source: task.source, role: "assistant", text: "",
+      created_at: task.created_at || new Date().toISOString(), delivery: task.state }, new Set());
+    row.classList.add("live-answer");
+    row.dataset.replyTo = task.message_id;
+    row.querySelector(".message-actions")?.remove();
+    messages.append(row);
+  }
+  const nearBottom = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 120;
+  const bubble = row.querySelector(".message-bubble");
+  const text = task.text || (task.state === "queued" ? "等待前一条任务完成…" : "正在等待 AI 开始回复…");
+  if (bubble.textContent !== text) bubble.textContent = text;
+  const labels = { running: "正在回复…", queued: "已排队", stopping: "正在请求停止…",
+    interrupted: "已停止", failed: "回答失败", stop_failed: "停止未确认，请到 AI 端检查" };
+  row.querySelector(".message-meta").textContent = task.error || labels[task.state] || task.state;
+  if (nearBottom) messages.scrollTop = messages.scrollHeight;
+}
+
+async function refreshTasks() {
+  if (tasksLoading || workspace.hidden || document.visibilityState !== "visible") return;
+  tasksLoading = true;
+  const context = answerContext(), target = source.value, session = selectedSessions[target] || "";
+  if (tasksContext !== context) { answerTasks = []; tasksContext = context; renderLiveAnswer(); }
+  try {
+    const result = await request(`/api/tasks?source=${encodeURIComponent(target)}${session ? `&session_id=${encodeURIComponent(session)}` : ""}`);
+    if (answerContext() !== context) return;
+    const changedTerminal = result.items.some((item) => ["completed", "interrupted", "failed", "stop_failed"].includes(item.state)
+      && !answerTasks.some((old) => old.message_id === item.message_id && old.state === item.state));
+    answerTasks = result.items;
+    if (changedTerminal) await refreshMessages();
+    renderLiveAnswer();
+  } catch (error) {
+    if (error.status === 401) showLogin();
+    // Keep the last task and its stop control during a transient read failure.
+  } finally { tasksLoading = false; }
+}
+
+$("#stop-answer").addEventListener("click", async () => {
+  const task = currentAnswerTask();
+  if (!task) return;
+  const context = answerContext();
+  task.state = "stopping";
+  $("#answer-error").textContent = "";
+  renderLiveAnswer();
+  try {
+    await request("/api/messages/stop", { method: "POST", body: JSON.stringify({
+      source: task.source, session_id: task.session_id, message_id: task.message_id,
+    }) });
+    await refreshTasks();
+  } catch (error) {
+    if (context === answerContext()) {
+      task.state = "running";
+      $("#answer-error").textContent = `停止请求未确认：${error.message}`;
+      renderLiveAnswer();
+    }
+  }
+});
 for (const target of conversationTargets) {
   try { selectedSessions[target] = sessionStorage.getItem(`conversation:${target}`); } catch {}
 }
@@ -609,6 +695,12 @@ async function refreshStatus() {
     const status = await request("/api/status");
     showWorkspace();
     updateDevice(status.device);
+    if (!displayPending) {
+      const desired = status.device.desired_theme === 1 ? "qiuqiu" : "original";
+      $("#display-theme").value = desired;
+      $("#display-state").textContent = !status.device.connected ? "设备重连后应用" :
+        status.device.display_theme === status.device.desired_theme ? "已应用" : "等待设备应用…";
+    }
     if (activePlayback && !activePlayback.stopping && !activePlayback.posting && playbackAtStart &&
         !playbackAtStart.posting && playbackAtStart.id === activePlayback.id &&
         status.playback?.playback_id !== activePlayback.id) {
@@ -665,6 +757,8 @@ function deliveryLabel(item) {
     completed: "已回复",
     failed: "发送失败",
     interrupted: "回复中断，请重新发送",
+    stopping: "正在请求停止…",
+    stop_failed: "停止未确认，请到 AI 端检查",
     not_configured: "旧消息，仅保存",
   }[item.delivery] || item.delivery;
 }
@@ -752,6 +846,7 @@ async function refreshMessages() {
     }
     messages.replaceChildren(...nodes);
     renderSpeechButtons();
+    renderLiveAnswer();
     if (nearBottom || sourceChanged) messages.scrollTop = messages.scrollHeight;
   } catch (error) {
     if (error.status === 401) showLogin();
@@ -820,22 +915,43 @@ $("#voice-select").addEventListener("change", async (event) => {
   } finally { select.disabled = false; }
 });
 
+let displayPending = false;
+function setDisplayPanel(open) {
+  $("#display-panel").hidden = !open;
+  $("#display-toggle").setAttribute("aria-expanded", String(open));
+  if (open) { setVolumePanel(false); setVoicePanel(false); }
+}
+$("#display-toggle").addEventListener("click", () => setDisplayPanel($("#display-panel").hidden));
+$("#display-panel").addEventListener("keydown", (event) => {
+  if (event.key === "Escape") { setDisplayPanel(false); $("#display-toggle").focus(); }
+});
+$("#display-theme").addEventListener("change", async (event) => {
+  displayPending = true;
+  event.target.disabled = true;
+  $("#display-error").textContent = "";
+  try {
+    await request("/api/device/theme", { method: "POST", body: JSON.stringify({ theme: event.target.value }) });
+    $("#display-state").textContent = "已保存，等待设备应用…";
+  } catch (error) { $("#display-error").textContent = error.message; }
+  finally { displayPending = false; event.target.disabled = false; await refreshStatus(); }
+});
+
 function setVolumePanel(open) {
   $("#audio-panel").hidden = !open;
   $("#volume-toggle").setAttribute("aria-expanded", String(open));
-  if (open) setVoicePanel(false);
+  if (open) { setVoicePanel(false); setDisplayPanel(false); }
 }
 function setVoicePanel(open) {
   $("#voice-tools-panel").hidden = !open;
   $("#voice-tools-toggle").setAttribute("aria-expanded", String(open));
-  if (open) setVolumePanel(false);
+  if (open) { setVolumePanel(false); setDisplayPanel(false); }
 }
 $("#voice-tools-toggle").addEventListener("click", () => setVoicePanel($("#voice-tools-panel").hidden));
 $("#volume-toggle").addEventListener("click", () => {
   setVolumePanel($("#audio-panel").hidden);
 });
 document.addEventListener("click", (event) => {
-  if (!event.target.closest(".device-audio-group")) { setVolumePanel(false); setVoicePanel(false); }
+  if (!event.target.closest(".device-audio-group")) { setVolumePanel(false); setVoicePanel(false); setDisplayPanel(false); }
 });
 $("#voice-tools-panel").addEventListener("keydown", (event) => {
   if (event.key === "Escape") { setVoicePanel(false); $("#voice-tools-toggle").focus(); }
@@ -889,6 +1005,7 @@ window.addEventListener("focus", () => { if (!workspace.hidden) { lastVoiceTarge
 setInterval(() => { if (!workspace.hidden) refreshMessages(); }, 2000);
 setInterval(() => { if (!workspace.hidden) { refreshStatus(); } }, 2000);
 setInterval(() => { if (!workspace.hidden) refreshSessions(); }, 6000);
+setInterval(refreshTasks, 500);
 
 // Keep the composer above Android/iOS on-screen keyboards.
 function fitViewport() {

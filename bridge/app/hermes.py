@@ -14,6 +14,7 @@ from .hermes_api import HermesRunsClient
 from .conversations import bind_draft, message_route
 from .process_utils import command_invocation
 from .storage import add_message, get_setting, set_delivery, set_setting
+from .answer_stream import CancellationUnconfirmed
 
 
 SESSION_SETTING = "hermes_session_id"
@@ -130,6 +131,8 @@ class HermesWorker:
         self._cancelled: set[int] = set()
         self._lock = threading.Lock()
         self._last_error: str | None = None
+        self._progress = {}
+        self._progress_revision = 0
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -155,7 +158,7 @@ class HermesWorker:
         current = self._preferred_session_info()
         with self._lock:
             return {"available": bool(self.executable or self.api_client), "pending": self._jobs.qsize(),
-                    "running": self._process is not None or self._run_id is not None,
+                    "running": self._current_message_id is not None,
                     "last_error": self._last_error, "session": current,
                     "mode": "runs-api" if self.api_client else "cli",
                     "approval": dict(self._pending_approval) if self._pending_approval else None}
@@ -213,13 +216,20 @@ class HermesWorker:
             return False
         preferred = None if new_session else self._preferred_session_info()
         session = preferred["id"] if preferred else None
+        with sqlite3.connect(self.database) as db:
+            row = db.execute('SELECT conversation_id,text,created_at FROM messages WHERE id=?', (message_id,)).fetchone()
         try:
             with self._lock:
                 self._queued_ids.add(message_id)
+                self._progress[message_id] = {'message_id': message_id, 'source': self.source,
+                    'session_id': row[0] if row else None, 'text': '', 'state': 'queued', 'error': None,
+                    'request_text': row[1] if row else '', 'created_at': row[2] if row else ''}
+                self._task_locked(message_id, state='queued')
                 try:
                     self._jobs.put_nowait((message_id, text, session))
                 except queue.Full:
                     self._queued_ids.discard(message_id)
+                    self._task_locked(message_id, state='failed', error='发送队列已满')
                     return False
             return True
         except Exception:
@@ -227,18 +237,54 @@ class HermesWorker:
                 self._queued_ids.discard(message_id)
             raise
 
-    def cancel(self, message_id: int) -> None:
+    def _task_locked(self, message_id, **changes):
+        task = self._progress.get(message_id)
+        if task is None:
+            return
+        self._progress_revision += 1
+        task.update(changes, revision=self._progress_revision)
+        if len(self._progress) > 64:
+            for old_id in list(self._progress):
+                if old_id != message_id and self._progress[old_id]['state'] in {'completed', 'interrupted', 'failed', 'stop_failed'}:
+                    del self._progress[old_id]
+                    if len(self._progress) <= 64:
+                        break
+
+    def _publish(self, message_id, text):
+        if not isinstance(text, str):
+            return
+        with self._lock:
+            if message_id != self._current_message_id or message_id in self._cancelled:
+                return
+            if self._progress.get(message_id, {}).get('state') != 'running':
+                return
+            self._task_locked(message_id, text=text[:200000])
+
+    def progress_snapshot(self, conversation):
+        with sqlite3.connect(self.database) as db:
+            allowed = {row[0] for row in db.execute(
+                'SELECT id FROM messages WHERE source=? AND conversation_id IS ?', (self.source, conversation))}
+        with self._lock:
+            return [dict(task) for mid, task in self._progress.items() if mid in allowed]
+
+    def cancel(self, message_id: int) -> bool:
         """Interrupt a queued or running voice turn; completed turns are untouched."""
         with self._lock:
             if message_id not in self._queued_ids and message_id != self._current_message_id:
-                return
+                return False
+            if self._progress.get(message_id, {}).get('state') in {'completed', 'interrupted', 'failed', 'stop_failed'}:
+                return False
             self._cancelled.add(message_id)
+            queued = message_id != self._current_message_id
+            self._task_locked(message_id, state='interrupted' if queued else 'stopping')
+            set_delivery(self.database, message_id, 'interrupted' if queued else 'stopping')
             process = self._process if message_id == self._current_message_id else None
         if process and process.poll() is None:
             try:
                 process.terminate()
             except OSError:
                 pass
+        return True
 
     def _ask(self, text: str, session: str | None) -> str:
         if self.api_client:
@@ -280,6 +326,13 @@ class HermesWorker:
             message_id = self._current_message_id
         deadline = time.monotonic() + 300
         stop_sent = False
+        terminal = False
+        follower_stop = threading.Event()
+        follower = None
+        if hasattr(self.api_client, 'follow_text'):
+            follower = threading.Thread(target=self.api_client.follow_text,
+                args=(run_id, lambda text: self._publish(message_id, text), follower_stop), daemon=True)
+            follower.start()
         last_approval_id = None
         try:
             while time.monotonic() < deadline:
@@ -315,6 +368,7 @@ class HermesWorker:
                     with self._lock:
                         self._pending_approval = None
                 if status == "completed":
+                    terminal = True
                     answer = state.get("output")
                     if not isinstance(answer, str) or not answer.strip():
                         raise RuntimeError("Hermes returned no text")
@@ -322,11 +376,21 @@ class HermesWorker:
                     self._last_run_session = session_id if isinstance(session_id, str) and session_id else None
                     return answer.strip()
                 if status in {"failed", "cancelled", "interrupted"}:
+                    terminal = True
                     raise RuntimeError(f"Hermes run {status}")
                 time.sleep(0.5)
             self.api_client.stop(run_id)
             raise RuntimeError("Hermes run timed out")
+        except Exception as exc:
+            with self._lock:
+                cancelled = message_id in self._cancelled
+            if cancelled and not terminal:
+                raise CancellationUnconfirmed('未能确认 Hermes 已停止，任务可能仍在运行，请在 Hermes 中检查') from exc
+            raise
         finally:
+            follower_stop.set()
+            if follower:
+                follower.join(timeout=.1)
             with self._lock:
                 self._run_id = None
                 self._pending_approval = None
@@ -341,6 +405,7 @@ class HermesWorker:
                 self._queued_ids.discard(message_id)
                 self._current_message_id = message_id
                 cancelled = message_id in self._cancelled
+                self._task_locked(message_id, state='interrupted' if cancelled else 'running')
             if cancelled:
                 set_delivery(self.database, message_id, "interrupted")
                 with self._lock:
@@ -356,15 +421,19 @@ class HermesWorker:
                 answer = self._ask(text, session)
                 with self._lock:
                     cancelled = message_id in self._cancelled
-                if cancelled:
-                    set_delivery(self.database, message_id, "interrupted")
-                    continue
-                add_message(self.database, self.source, answer, role="assistant",
-                            delivery="completed", reply_to=message_id, conversation_id=conversation)
-                bind_draft(self.database, conversation, self._last_run_session)
-                if self._last_run_session:
-                    set_setting(self.database, self.session_setting, self._last_run_session)
-                set_delivery(self.database, message_id, "completed")
+                    if cancelled:
+                        set_delivery(self.database, message_id, "interrupted")
+                        self._task_locked(message_id, state='interrupted')
+                        continue
+                    # Serialize final settlement with cancel, so a successful stop
+                    # cannot race between the cancellation check and publication.
+                    add_message(self.database, self.source, answer, role="assistant",
+                                delivery="completed", reply_to=message_id, conversation_id=conversation)
+                    bind_draft(self.database, conversation, self._last_run_session)
+                    if self._last_run_session:
+                        set_setting(self.database, self.session_setting, self._last_run_session)
+                    set_delivery(self.database, message_id, "completed")
+                    self._task_locked(message_id, state='completed', text=answer, error=None)
                 with self._lock:
                     self._last_error = None
             except Exception as exc:
@@ -372,8 +441,12 @@ class HermesWorker:
                     cancelled = message_id in self._cancelled
                     if not cancelled:
                         self._last_error = str(exc)
-                set_delivery(self.database, message_id,
-                             "interrupted" if cancelled else "failed")
+                delivery = ('stop_failed' if isinstance(exc, CancellationUnconfirmed) else
+                            'interrupted' if cancelled else 'failed')
+                set_delivery(self.database, message_id, delivery)
+                with self._lock:
+                    self._task_locked(message_id, state=delivery,
+                                      error=str(exc) if delivery != 'interrupted' else None)
                 if self.on_error and not cancelled:
                     try:
                         self.on_error(message_id, str(exc))

@@ -23,6 +23,7 @@ WELCOME = 0x0A
 AUDIO_END = 0x0B
 FACE = 0x0C
 ANIMATION = 0x0D
+THEME = 0x0E
 
 
 @dataclass(frozen=True)

@@ -36,6 +36,7 @@ def initialize(path: Path) -> None:
         # A Bridge restart cannot safely resume an in-flight Hermes turn.
         db.execute("UPDATE messages SET delivery = 'interrupted' "
                    "WHERE source IN ('hermes', 'deepseek_harness') AND delivery IN ('queued', 'running')")
+        db.execute("UPDATE messages SET delivery='stop_failed' WHERE delivery='stopping'")
         db.execute("CREATE TABLE IF NOT EXISTS conversations (id TEXT PRIMARY KEY, source TEXT NOT NULL, "
                    "native_id TEXT, title TEXT NOT NULL, created_at REAL NOT NULL)")
         db.execute("CREATE TABLE IF NOT EXISTS deleted_sessions (source TEXT NOT NULL, native_id TEXT NOT NULL, "

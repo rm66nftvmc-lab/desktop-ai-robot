@@ -2,6 +2,16 @@
 
 Last updated: 2026-10-18
 
+## Qiuqiu display and incremental answers (2026-10-18)
+
+- Firmware `voice-device-1.9` preserves the original character and all 64 cached poses, and adds an independently rendered Qiuqiu sphere theme. Continuous eye movement and blinking render at measured **30.3 new frames/second** (91 frames per ~3 seconds); a whole opaque buffer is sent without clearing between frames. Texture generation is reproducible with `scripts/build_qiuqiu.py`. Recording freezes the display to protect microphone capture; speaking keeps animation enabled.
+- The screen icon beside the device badge opens an Original / Qiuqiu selector. The authenticated, same-origin `/api/device/theme` endpoint persists the choice in the existing settings database and replays it on USB handshake. Actual switch back to Original and back to Qiuqiu succeeded with 64 cached poses retained and CRC errors 0. Qiuqiu is selected on this computer.
+- Character reference: [sam70361/aora-bot](https://github.com/sam70361/aora-bot). This is a lightweight hardware adaptation, not the entire browser emotion engine. Ball visuals are **non-commercial only**; original LICENSE and NOTICE are retained under `voice-device/assets/qiuqiu/`.
+- Hermes official SSE and Harness authenticated session-follow WebSocket deliver public text incrementally. Reasoning and tool arguments are excluded. Web polling is scoped to the selected agent/conversation and ignores late results after switching. Final native history replaces live text.
+- “停止回答” cancels the selected queued/running request. Harness queued requests are removed from its inbox; active requests wait for their own turn-end. A remote acknowledgement alone is not treated as a confirmed stop. Failed confirmation stays visible. Accepted cancellation suppresses late automatic speech; it cannot undo already executed tool actions.
+- Verification: **130 Python tests and 10 Node interaction tests passed**; firmware built and uploaded successfully. Live disposable-session tests passed for **both agents**: multiple partial updates before completion, stop during output, confirmed interruption, and permanent removal of test conversations. Browser visual and physical appearance checks remain user observations.
+
+
 ## Message playback toggle (2026-10-18)
 
 - Assistant-message speech actions now use a compact play icon that becomes a stop icon immediately, including while speech is being generated. Clicking again stops the same request; switching messages moves the active state to the new message. Touch hit areas are larger than the visible icon.

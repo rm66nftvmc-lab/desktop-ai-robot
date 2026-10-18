@@ -91,6 +91,16 @@ class VoiceConversation:
             self._state = "interrupted"
             self._last_error = "设备已断开，本轮语音已停止；已发送的消息仍可在会话查看，重连后可重新录音"
 
+    def on_answer_cancelled(self, message_id: int, source: str) -> None:
+        with self._lock:
+            if self._message_id != message_id or self._message_source != source:
+                return
+            self._message_id = None
+            self._output_generation += 1
+            self._state = 'interrupted'
+            self._last_error = '已停止接收本轮语音回复；AI 取消结果请看当前会话状态'
+        self.device.set_face(faces.READY)
+
     def on_listen_start(self, capture_generation: int) -> None:
         # Never call a network API on the serial receive thread. Selection was
         # validated by the web endpoint; snapshot it before recording begins.

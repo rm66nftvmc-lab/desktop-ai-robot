@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>桌面 AI 机器人 · Bridge</title>
-  <link rel="stylesheet" href="/assets/style.css?v=20">
+  <link rel="stylesheet" href="/assets/style.css?v=21">
 </head>
 <body>
   <section id="login" class="login-screen">
@@ -73,6 +73,9 @@
         </div>
         <div class="device-audio-group">
           <div class="device-status-row">
+            <button type="button" id="display-toggle" class="audio-icon-button" aria-label="显示动画" title="显示动画" aria-expanded="false" aria-controls="display-panel">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h18v13H3ZM8 21h8M12 17v4"/></svg>
+            </button>
             <button type="button" id="volume-toggle" class="audio-icon-button" aria-label="调节机器人音量" title="调节机器人音量" aria-expanded="false" aria-controls="audio-panel">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16M9 4v6M15 14v6"/></svg>
             </button>
@@ -81,6 +84,14 @@
             </button>
             <span id="device" class="device-pill">检查设备中</span>
           </div>
+          <section id="display-panel" class="audio-controls" aria-label="显示动画" hidden>
+            <div class="tools-content voice-tools-content">
+              <label for="display-theme">显示动画</label>
+              <select id="display-theme"><option value="original">原角色</option><option value="qiuqiu">球球</option></select>
+              <p id="display-state" class="muted" role="status"></p>
+              <p id="display-error" class="form-error" role="alert"></p>
+            </div>
+          </section>
           <section id="voice-tools-panel" class="audio-controls" aria-label="语音工具" hidden>
             <div class="tools-content voice-tools-content">
               <label for="voice-select">回复声线</label>
@@ -119,15 +130,17 @@
           <label class="visually-hidden" for="prompt">输入消息</label>
           <textarea id="prompt" rows="3" maxlength="4000" placeholder="给 Hermes 发消息…"></textarea>
           <div class="composer-actions">
+            <button id="stop-answer" type="button" class="secondary-button" hidden title="请求停止当前 AI 任务；已经执行的操作不会撤销">停止回答</button>
             <button type="submit" class="primary-button send-button">发送 <span aria-hidden="true">↗</span></button>
           </div>
         </form>
         <p id="playback-status" class="playback-status" role="status" aria-live="polite"></p>
         <p id="send-error" class="form-error" role="alert"></p>
+        <p id="answer-error" class="form-error" role="alert"></p>
       </div>
     </main>
   </div>
   <script src="/assets/ui-state.js?v=1" defer></script>
-  <script src="/assets/app.js?v=25" defer></script>
+  <script src="/assets/app.js?v=26" defer></script>
 </body>
 </html>
