@@ -2,6 +2,13 @@
 
 Last updated: 2026-10-18
 
+## Changed-pixel display update (2026-10-18)
+
+- User observation: 60 Hz still flickered during recording/playback; pausing animation removed the flicker during those operations. This links the visible issue to continuous display updates; it does not establish a specific panel timing/electrical cause.
+- Firmware `voice-device-1.12` caches the preceding face region (23,940 bytes) and compares the completed RGB565 output in 8×8 tiles. Only neighboring changed tiles are merged and transmitted; clean tiles are never bridged. Old feature locations are restored in the composed frame and included in the comparison, avoiding trails without a base-only erase pass on screen. Identical quantized frames perform no SPI write.
+- Theme changes, solid-color tests and first entry invalidate the comparison cache and repaint completely once. Allocation failure falls back to the previous region transfer. All SPI activity remains on its single rendering task, with the 60 Hz motion clock retained.
+- New device diagnostics report actual ball pixel bytes sent, changed-tile count and comparison-buffer availability. Backend regression suite: **134 tests passed**. Hardware: ~60 motion updates/s, 86.5–87.3% fewer pixel bytes in recording-expression/thinking previews and 89.5–90.3% fewer during actual speech; 387/387 audio acknowledgements, CRC 0, comparison buffer available, no disconnect. Physical flicker confirmation remains pending.
+
 ## Faster Qiuqiu rendering and expression gallery (2026-10-18)
 
 - Firmware `voice-device-1.11` moves all SPI drawing to one FreeRTOS task on core 0; the Arduino core continues USB, microphone and I2S output. Atomic pending commands and status fields prevent cross-core mutation of the pixel buffer. If task creation fails, the original single-core service remains available.

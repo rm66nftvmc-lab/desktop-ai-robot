@@ -71,6 +71,9 @@ class DeviceLink:
             "screen_presents": None,
             "screen_source_updates": None,
             "screen_cached_frames": None,
+            "screen_ball_bytes": None,
+            "screen_dirty_tiles": None,
+            "screen_diff_buffer": None,
             "face": None,
             "last_error": None,
         }
@@ -284,6 +287,9 @@ class DeviceLink:
                 screen_source_updates=status.get("source_updates"),
                 screen_cached_frames=status.get("cached_frames"),
                 display_theme=status.get('display_theme'),
+                screen_ball_bytes=status.get('ball_bytes'),
+                screen_dirty_tiles=status.get('dirty_tiles'),
+                screen_diff_buffer=status.get('diff_buffer'),
             )
         elif frame.kind == protocol.BUTTON and frame.payload:
             listening = frame.payload[0] == 1

@@ -165,6 +165,11 @@ static qiuqiu::Motion qiuqiuMotion;
 static bool qiuqiuNeedsFull=true;
 static std::atomic<float> speakerEnvelope{0};
 static uint8_t *qiuqiuBase=nullptr;
+static uint8_t *qiuqiuPrevious=nullptr;
+static bool qiuqiuPreviousValid=false;
+static constexpr int QX=42,QY=38,QW=105,QH=114,QT=8;
+static std::atomic<uint32_t> qiuqiuPixelBytes{0};
+static std::atomic<uint16_t> qiuqiuDirtyTiles{0};
 static std::atomic<uint32_t> speakerEnvelopeAt{0};
 
 static qiuqiu::Mood qiuqiuMood() {
@@ -190,6 +195,54 @@ static void qiuqiuInk(int x,int y,float coverage) {
   int b=(bg&31)*(1-coverage)+(fg&31)*coverage;
   uint16_t color=(r<<11)|(g<<5)|b;
   lcdFrameBytes[offset]=color>>8; lcdFrameBytes[offset+1]=color;
+}
+
+// Compare final RGB565 pixels, including antialiasing and erased old features.
+// Never send a base-only intermediate image. Unchanged tiles stay in LCD RAM.
+static bool qiuqiuPresent(bool full) {
+  bool wrote=false;
+  qiuqiuDirtyTiles=0;
+  auto push=[&](int x,int y,int width,int height) {
+    lcdSetWindow(24+x,64+y,24+x+width-1,64+y+height-1);
+    lcdBeginPixels();
+    for(int row=y;row<y+height;++row)
+      SPI.writeBytes(lcdFrameBytes+(row*192+x)*2,width*2);
+    lcdEndPixels();
+    qiuqiuPixelBytes.fetch_add(width*height*2);
+    wrote=true;
+  };
+  if(full || !qiuqiuPrevious || !qiuqiuPreviousValid) {
+    if(full) push(0,0,192,192); else push(QX,QY,QW,QH);
+  } else {
+    constexpr int columns=(QW+QT-1)/QT,rows=(QH+QT-1)/QT;
+    bool changed[rows][columns]={};
+    uint16_t count=0;
+    for(int ty=0;ty<rows;++ty) for(int tx=0;tx<columns;++tx) {
+      int x=tx*QT,width=min(QT,QW-x),bottom=min(QH,(ty+1)*QT);
+      for(int y=ty*QT;y<bottom;++y) {
+        if(memcmp(lcdFrameBytes+((QY+y)*192+QX+x)*2,
+                  qiuqiuPrevious+(y*QW+x)*2,width*2)!=0) {
+          changed[ty][tx]=true;++count;break;
+        }
+      }
+    }
+    qiuqiuDirtyTiles=count;
+    // Merge neighboring changed tiles, never bridge a clean tile. Commands
+    // remain bounded, and RGB565 quantization can skip unchanged frames.
+    for(int ty=0;ty<rows;++ty) for(int tx=0;tx<columns;) {
+      if(!changed[ty][tx]) {++tx;continue;}
+      int first=tx;
+      while(tx<columns && changed[ty][tx]) ++tx;
+      int left=first*QT,right=min(QW,tx*QT);
+      push(QX+left,QY+ty*QT,right-left,min(QT,QH-ty*QT));
+    }
+  }
+  if(qiuqiuPrevious) {
+    for(int y=0;y<QH;++y)
+      memcpy(qiuqiuPrevious+y*QW*2,lcdFrameBytes+((QY+y)*192+QX)*2,QW*2);
+    qiuqiuPreviousValid=true;
+  }
+  return wrote;
 }
 
 static void lcdDrawQiuqiu() {
@@ -235,17 +288,12 @@ static void lcdDrawQiuqiu() {
     float dx=(x-96)/10.f,dy=(y-128)/ry;
     qiuqiuInk(x,y,fminf(1.f,fmaxf(0.f,(1-sqrtf(dx*dx+dy*dy))*ry))*fminf(1.f,pose.mouth*5));
   }
-  // Pack the completed rectangle, preserving the old theme's orientation.
-  for(int y=y0;y<=y1;++y)
-    memmove(lcdFrameBytes+(y-y0)*rowBytes,lcdFrameBytes+(y*192+x0)*2,rowBytes);
   lcdComposeUs=micros()-started;
-  lcdCachedLength=rowBytes*(y1-y0+1);
   ++lcdSourceUpdates;
   const uint32_t pushStarted=micros();
-  lcdSetWindow(24+x0,64+y0,24+x1,64+y1);
-  lcdBeginPixels(); SPI.writeBytes(lcdFrameBytes,lcdCachedLength); lcdEndPixels();
+  if(qiuqiuPresent(full)) ++lcdPresents;
   lcdPushUs=micros()-pushStarted;
-  ++lcdPresents; ++currentFaceFrame;
+  ++currentFaceFrame;
   qiuqiuNeedsFull=false;
 }
 
@@ -368,14 +416,14 @@ static void lcdDrawFace(int index) {
 static void lcdService() {
   int theme=pendingTheme.exchange(-1);
   if(theme>=0 && theme!=displayTheme.load()) {
-    displayTheme=theme; qiuqiuNeedsFull=true;
+    displayTheme=theme; qiuqiuNeedsFull=true; qiuqiuPreviousValid=false;
     if(theme==1) lcdFill(0x0843); else lcdDrawBackground();
     int face=currentFace.load(); currentFace=-1; lcdApplyFace(face);
   }
   int face=pendingFace.exchange(-1);
   if(face>=0) lcdApplyFace(face);
   int color=pendingColor.exchange(-1);
-  if(color>=0) {lcdFill(color);qiuqiuNeedsFull=true;}
+  if(color>=0) {lcdFill(color);qiuqiuNeedsFull=true;qiuqiuPreviousValid=false;}
   lcdTickAnimation();
 }
 
@@ -389,6 +437,7 @@ static void lcdInit() {
   if (!lcdFrameBytes)
     lcdFrameBytes=static_cast<uint8_t *>(heap_caps_malloc(frameBytes,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
   lcdWarmFrameCache();
+  qiuqiuPrevious=static_cast<uint8_t *>(heap_caps_malloc(QW*QH*2,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
   qiuqiuBase=static_cast<uint8_t *>(heap_caps_malloc(192*192*2,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
   if(qiuqiuBase) for(int y=0;y<192;++y) for(int x=0;x<192;++x) {
     uint16_t c=pgm_read_word(&QIUQIU_TEXTURE[y*192+x]);
@@ -573,18 +622,18 @@ void loop() {
   pollButton();
   if (!connected && millis()-lastHello>=2000) {
     lastHello=millis();
-      sendJson(FRAME_HELLO,"{\"protocol\":1,\"firmware\":\"voice-device-1.11\"}");
+      sendJson(FRAME_HELLO,"{\"protocol\":1,\"firmware\":\"voice-device-1.12\"}");
   }
   if (connected && millis()-lastStatus>=3000) {
     lastStatus=millis();
-    char status[512];
-    snprintf(status,sizeof(status),"{\"listening\":%s,\"playing\":%s,\"speaker_ready\":%s,\"face\":%d,\"frame\":%u,\"uptime_ms\":%lu,\"audio_rx\":%lu,\"audio_ack\":%lu,\"bad_crc\":%lu,\"reset_reason\":%d,\"screen_buffer\":%s,\"compose_us\":%lu,\"push_us\":%lu,\"animation_enabled\":%s,\"presents\":%lu,\"source_updates\":%lu,\"cached_frames\":%u,\"display_theme\":%u}",
+    char status[768];
+    snprintf(status,sizeof(status),"{\"listening\":%s,\"playing\":%s,\"speaker_ready\":%s,\"face\":%d,\"frame\":%u,\"uptime_ms\":%lu,\"audio_rx\":%lu,\"audio_ack\":%lu,\"bad_crc\":%lu,\"reset_reason\":%d,\"screen_buffer\":%s,\"compose_us\":%lu,\"push_us\":%lu,\"animation_enabled\":%s,\"presents\":%lu,\"source_updates\":%lu,\"cached_frames\":%u,\"display_theme\":%u,\"ball_bytes\":%lu,\"dirty_tiles\":%u,\"diff_buffer\":%s}",
       listening?"true":"false",playing?"true":"false",speakerReady?"true":"false",currentFace.load(),currentFaceFrame.load(),
       static_cast<unsigned long>(millis()),static_cast<unsigned long>(receivedAudio),
       static_cast<unsigned long>(sentAcks),static_cast<unsigned long>(badCrc),
       static_cast<int>(esp_reset_reason()),lcdFrameBytes?"true":"false",
       static_cast<unsigned long>(lcdComposeUs),static_cast<unsigned long>(lcdPushUs),animationEnabled?"true":"false",
-      static_cast<unsigned long>(lcdPresents),static_cast<unsigned long>(lcdSourceUpdates),lcdCachedFrames,displayTheme.load());
+      static_cast<unsigned long>(lcdPresents),static_cast<unsigned long>(lcdSourceUpdates),lcdCachedFrames,displayTheme.load(),static_cast<unsigned long>(qiuqiuPixelBytes.load()),qiuqiuDirtyTiles.load(),qiuqiuPrevious?"true":"false");
     sendJson(FRAME_STATUS,status);
   }
   pollMicrophone();

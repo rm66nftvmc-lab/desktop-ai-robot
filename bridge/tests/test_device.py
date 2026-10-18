@@ -6,6 +6,16 @@ from bridge.app.device import DeviceLink
 from bridge.app.protocol import AUDIO_UP, BUTTON, Frame
 
 
+def test_changed_pixel_diagnostics_report_actual_device_counters():
+    from bridge.app.protocol import STATUS
+    device=DeviceLink()
+    device._handle(Frame(STATUS,1,b'{"ball_bytes":4096,"dirty_tiles":6,"diff_buffer":true}'),None,0)
+    state=device.snapshot()
+    assert state['screen_ball_bytes']==4096
+    assert state['screen_dirty_tiles']==6
+    assert state['screen_diff_buffer'] is True
+
+
 def test_animation_pause_is_queued_until_connected_without_stopping_audio():
     from bridge.app.protocol import ANIMATION, FrameParser
 
