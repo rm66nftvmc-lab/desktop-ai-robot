@@ -30,9 +30,13 @@ if (-not (Test-Path -LiteralPath $python)) {
 }
 
 function Get-PortOwner([int]$port) {
-    $connection = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
-        Select-Object -First 1
-    if ($connection) { return [int]$connection.OwningProcess }
+    # Get-NetTCPConnection can stall in the Windows networking CIM provider,
+    # especially while a listener is being removed. netstat avoids that query.
+    foreach ($line in (& netstat.exe -ano -p tcp)) {
+        if ($line -match '^\s*TCP\s+\S+:(\d+)\s+\S+\s+LISTENING\s+(\d+)\s*$' -and [int]$Matches[1] -eq $port) {
+            return [int]$Matches[2]
+        }
+    }
     return 0
 }
 
@@ -80,6 +84,8 @@ if ($Restart) {
     # line proves they belong to this project are removed.
     $paimonOwner = Get-PortOwner 9880
     if ($paimonOwner) { Stop-OwnedProcess $paimonOwner 'tts-paimon' 'Paimon TTS' }
+    $cosyvoiceOwner = Get-PortOwner 9881
+    if ($cosyvoiceOwner) { Stop-OwnedProcess $cosyvoiceOwner 'cosyvoice_local_server\.py' 'CosyVoice TTS' }
     $harnessOwner = Get-PortOwner 3081
     if ($harnessOwner) { Stop-OwnedProcess $harnessOwner 'harness-bridge\.patch' 'Bridge Harness Host' }
 }

@@ -31,6 +31,30 @@ def test_animation_pause_is_queued_until_connected_without_stopping_audio():
     assert device._send_pending_animation(port, 9) == 9
 
 
+def test_quiet_playback_pauses_until_device_finishes_and_restores_user_animation():
+    from bridge.app.protocol import ANIMATION, FrameParser
+    device = DeviceLink()
+    device.set_quiet_playback(True)
+    device._update(connected=True, playing=False, device_playing=False)
+    port = io.BytesIO()
+    assert device._send_pending_animation(port, 1) == 2
+    device._update(playing=True)
+    assert device._send_pending_animation(port, 2) == 3
+    device._update(playing=False, device_playing=True)
+    assert device._send_pending_animation(port, 3) == 3
+    device._update(device_playing=False)
+    assert device._send_pending_animation(port, 3) == 4
+    frames = FrameParser().feed(port.getvalue())
+    assert [(frame.kind, frame.payload) for frame in frames] == [
+        (ANIMATION, b'\x01'), (ANIMATION, b'\x00'), (ANIMATION, b'\x01')]
+    device.set_animation(False)
+    assert device._send_pending_animation(port, 4) == 5
+    device._update(playing=True)
+    assert device._send_pending_animation(port, 5) == 5
+    device._update(playing=False)
+    assert device._send_pending_animation(port, 5) == 5
+
+
 def test_button_capture_produces_local_pcm_wav():
     device = DeviceLink()
     device._handle(Frame(BUTTON, 1, b"\x01"), None, 0)

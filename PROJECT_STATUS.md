@@ -2,6 +2,15 @@
 
 Last updated: 2026-10-18
 
+## Free local Qiuqiu voice and UI (2026-10-18)
+
+- User chose **free local only**. CosyVoice 3 runs in its own computer-side environment; no cloud voice account or paid synthesis call is configured. This is an alternative voice, not cloud Long Anhuan V3. Paimon and Kokoro remain available.
+- Voice tools offer Qiuqiu Mandarin/English and Qiuqiu Cantonese, plus Mandarin, English, mixed-language and Cantonese audition presets. Voice switching finishes before audition begins. Short English/mixed utterances remain intact instead of using the legacy 18-character first chunk. Separate cached Cantonese instruction conditioning prevents reuse of the generic Mandarin prompt.
+- Actual offline synthesis succeeded for all four audition types. Earlier robot tests confirmed complete audio acknowledgement with CRC 0, but the user reported continuous noise and insufficient loudness. A whole-clip peak cap was reducing average loudness; Qiuqiu now uses bounded soft limiting. The user confirmed **no noise / normal sound** for the subsequent 60%-volume, paused-animation test. That exact amplitude is now Qiuqiu's 100% slider ceiling, without changing other voices.
+- Qiuqiu playback automatically pauses animation while host audio or device audio remains active and restores the user's requested animation state afterward. This applies to message readout, test speech and automatic AI replies. The combined quiet configuration is validated; which individual change removed the noise has not been isolated.
+- UI integration verification: **142 Python tests and 11 Node interaction tests passed**. A real Bridge audition at the new 100% ceiling completed **108/108** audio acknowledgements, CRC 0, no disconnect. Telemetry confirmed animation paused during speech and resumed after playback. The bilingual local Qiuqiu voice is selected on this computer.
+- Installation and license/source details: [LOCAL_COSYVOICE.md](docs/LOCAL_COSYVOICE.md). Anhui speech is not offered because explicit support in this open model has not been established. Source/model revisions are pinned; downloaded weights are checksum-verified and excluded from Git. The private worker binds loopback and uses a per-process secret.
+
 ## Changed-pixel display update (2026-10-18)
 
 - User observation: 60 Hz still flickered during recording/playback; pausing animation removed the flicker during those operations. This links the visible issue to continuous display updates; it does not establish a specific panel timing/electrical cause.

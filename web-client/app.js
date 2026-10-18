@@ -12,6 +12,8 @@ const targets = {
 let lastMessageVersion = "";
 let messagesLoading = false;
 let playbackRequestId = 0;
+let voiceChangePending = false;
+let voicePresetInitialized = false;
 let activePlayback = null;
 let pendingApproval = null;
 let audioOutput = { volume: 100, muted: false, enabled: true };
@@ -721,7 +723,21 @@ async function refreshStatus() {
     const voiceStatus = status.tts || {};
     const paimonOption = $("#voice-select option[value='paimon']");
     paimonOption.disabled = !voiceStatus.paimon_ready;
-    $("#voice-select").value = voiceStatus.active || "kokoro";
+    for (const voice of voiceStatus.voices || []) {
+      const option = [...$("#voice-select").options].find((item) => item.value === voice.id);
+      if (option) option.disabled = !voice.ready;
+    }
+    if (!voiceChangePending) {
+      const activeVoice = voiceStatus.active || "kokoro";
+      $("#voice-select").value = activeVoice;
+      const localBall = activeVoice.startsWith("cosyvoice");
+      $("#voice-presets").hidden = !localBall;
+      if (localBall && !voicePresetInitialized) {
+        $("#voice-test-language").value = activeVoice === "cosyvoice-yue" ? "yue" : "zh";
+        $("#speak-text").value = voiceTestPreset($("#voice-test-language").value).text;
+        voicePresetInitialized = true;
+      }
+    }
     const connected = status.hermes?.available;
     const voiceTarget = status.voice?.target;
     if (voiceTarget) $("#voice-tools-toggle").title = `语音工具 · 按键录音目标：${targets[voiceTarget.source]?.title || "未选择"}`;
@@ -898,21 +914,61 @@ $("#composer").addEventListener("submit", async (event) => {
 
 $("#tts-form").addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (voiceChangePending) return;
+  if ($("#voice-select").value.startsWith("cosyvoice")) {
+    const preset = voiceTestPreset($("#voice-test-language").value);
+    if ($("#voice-select").value !== preset.voice && !await chooseVoice(preset.voice)) return;
+  }
   await playSpeech($("#speak-text").value, $("#tts-form button[type=submit]"), $("#tts-error"));
 });
 
-$("#voice-select").addEventListener("change", async (event) => {
-  const select = event.currentTarget;
-  select.disabled = true;
+function voiceTestPreset(language) {
+  return {
+    zh: {voice:"cosyvoice", text:"你好，我是球球，很高兴见到你。"},
+    en: {voice:"cosyvoice", text:"Hello, I am your robot. Nice to meet you."},
+    mixed: {voice:"cosyvoice", text:"你好，我是球球。Hello, I am your robot. 很高兴见到你。"},
+    yue: {voice:"cosyvoice-yue", text:"你好呀，我係球球，好高興識到你。"},
+  }[language];
+}
+
+async function chooseVoice(voice) {
+  voiceChangePending = true;
+  $("#voice-select").disabled = true;
+  $("#voice-test-language").disabled = true;
+  $("#tts-form button[type=submit]").disabled = true;
+  $("#tts-error").textContent = "";
   try {
     await request("/api/tts/voice", {
-      method: "POST", body: JSON.stringify({ voice: select.value }),
+      method: "POST", body: JSON.stringify({ voice }),
     });
-    await refreshStatus();
+    return true;
   } catch (error) {
     $("#tts-error").textContent = error.message;
+    return false;
+  } finally {
+    voiceChangePending = false;
+    $("#voice-select").disabled = false;
+    $("#voice-test-language").disabled = false;
+    $("#tts-form button[type=submit]").disabled = false;
     await refreshStatus();
-  } finally { select.disabled = false; }
+  }
+}
+
+$("#voice-select").addEventListener("change", async (event) => {
+  const voice = event.currentTarget.value;
+  if (voice.startsWith("cosyvoice")) {
+    $("#voice-test-language").value = voice === "cosyvoice-yue" ? "yue" : "zh";
+    $("#speak-text").value = voiceTestPreset($("#voice-test-language").value).text;
+    voicePresetInitialized = true;
+  }
+  await chooseVoice(voice);
+});
+
+$("#voice-test-language").addEventListener("change", async (event) => {
+  const preset = voiceTestPreset(event.currentTarget.value);
+  $("#speak-text").value = preset.text;
+  voicePresetInitialized = true;
+  if ($("#voice-select").value !== preset.voice) await chooseVoice(preset.voice);
 });
 
 let displayPending = false;

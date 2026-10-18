@@ -2,6 +2,36 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const ui = require('../ui-state.js');
 
+test('English audition waits for switching away from Cantonese before playing', async () => {
+  const fs = require('node:fs'), vm = require('node:vm');
+  const source = fs.readFileSync(require.resolve('../app.js'), 'utf8');
+  const handlers = new Map(), nodes = new Map();
+  const node = (selector) => {
+    if (!nodes.has(selector)) nodes.set(selector, {value:'', disabled:false, textContent:'',
+      addEventListener(type, handler) { handlers.set(selector+':'+type, handler); }});
+    return nodes.get(selector);
+  };
+  node('#voice-select').value='cosyvoice-yue';
+  node('#voice-test-language').value='en';
+  let finish, requested, played;
+  const context = vm.createContext({voiceChangePending:false, voicePresetInitialized:true,
+    $:node, request:(_path, options)=>{requested=JSON.parse(options.body).voice; return new Promise(resolve=>{finish=resolve;});},
+    refreshStatus:async()=>{node('#voice-select').value=requested;},
+    playSpeech:async(text)=>{played=text;}});
+  vm.runInContext(source.slice(source.indexOf('$("#tts-form").addEventListener'),
+    source.indexOf('let displayPending = false;')), context);
+  const change = handlers.get('#voice-test-language:change')({currentTarget:node('#voice-test-language')});
+  assert.equal(requested,'cosyvoice');
+  assert.equal(node('#voice-test-language').disabled,true);
+  await handlers.get('#tts-form:submit')({preventDefault(){}});
+  assert.equal(played,undefined);
+  finish({}); await change;
+  await handlers.get('#tts-form:submit')({preventDefault(){}});
+  assert.match(played,/^Hello, I am your robot/);
+  assert.equal(node('#voice-select').value,'cosyvoice');
+  assert.equal(node('#voice-test-language').disabled,false);
+});
+
 function answerHarness(request) {
   const fs = require('node:fs'), vm = require('node:vm');
   const source = fs.readFileSync(require.resolve('../app.js'), 'utf8');

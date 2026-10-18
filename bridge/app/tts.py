@@ -16,6 +16,7 @@ from threading import Lock
 from typing import Callable
 
 import numpy as np
+from . import cosyvoice_local
 
 VOICE_NAME = "Kokoro 中文女声 · zf_001"
 ENGLISH_VOICE_NAME = "Kokoro 英文女声 · af_heart"
@@ -76,32 +77,52 @@ def voice_status(data_dir: Path) -> dict:
     ready = all(path.is_file() for path in _model_files(data_dir))
     english_ready = all(path.is_file() for path in _english_model_files(data_dir))
     selected = selected_voice(data_dir)
-    paimon_ready = paimon_status(data_dir)["ready"]
+    paimon = paimon_status(data_dir)
+    paimon_ready = paimon["ready"]
+    cosy_ready = cosyvoice_local.status(data_dir)["ready"]
     active = selected
     current = PAIMON_VOICE_NAME if active == "paimon" else (
         VOICE_NAME if ready else "Windows 中文语音")
+    if active in cosyvoice_local.VOICES:
+        current = cosyvoice_local.VOICES[active]
     return {"name": current, "ready": ready, "english_ready": english_ready,
             "english_voice": ENGLISH_VOICE_NAME,
-            "engine": "gpt-sovits-multilingual-local" if active == "paimon" else
+            "engine": "cosyvoice3-local" if active in cosyvoice_local.VOICES else
+                      "gpt-sovits-multilingual-local" if active == "paimon" else
                       "kokoro-local" if ready else "sapi-local",
             "selected": selected, "active": active, "paimon_ready": paimon_ready,
             "voices": [{"id": "kokoro", "name": VOICE_NAME, "ready": ready},
-                       {"id": "paimon", "name": PAIMON_VOICE_NAME, "ready": paimon_ready}]}
+                       {"id": "paimon", "name": PAIMON_VOICE_NAME, "ready": paimon.get("installed", paimon_ready)}]
+                      + [{"id": key, "name": name, "ready": cosy_ready}
+                         for key, name in cosyvoice_local.VOICES.items()]}
 
 
 def selected_voice(data_dir: Path) -> str:
     try:
         value = json.loads((data_dir / "tts-voice.json").read_text(encoding="utf-8"))
-        return "paimon" if value.get("voice") == "paimon" else "kokoro"
+        voice = value.get("voice")
+        return voice if voice in {"paimon", *cosyvoice_local.VOICES} else "kokoro"
     except (OSError, ValueError, AttributeError):
         return "kokoro"
 
 
 def set_selected_voice(data_dir: Path, voice: str) -> None:
-    if voice not in {"kokoro", "paimon"}:
+    if voice not in {"kokoro", "paimon", *cosyvoice_local.VOICES}:
         raise ValueError("Unknown voice")
-    if voice == "paimon" and not paimon_status(data_dir)["ready"]:
-        raise RuntimeError("派蒙本地语音引擎或模型尚未就绪")
+    if voice == "paimon":
+        paimon = paimon_status(data_dir)
+        if not paimon.get("installed", paimon["ready"]):
+            raise RuntimeError("派蒙本地语音引擎或模型尚未就绪")
+        cosyvoice_local.stop()
+        if not paimon["ready"]:
+            start_paimon_service(data_dir)
+    if voice in cosyvoice_local.VOICES:
+        if not cosyvoice_local.status(data_dir)["ready"]:
+            raise RuntimeError("球球本地声线尚未安装完成")
+        stop_paimon_service()
+        cosyvoice_local.start(data_dir)
+    elif voice == "kokoro":
+        cosyvoice_local.stop()
     data_dir.mkdir(parents=True, exist_ok=True)
     temporary = data_dir / "tts-voice.json.tmp"
     temporary.write_text(json.dumps({"voice": voice}, ensure_ascii=False), encoding="utf-8")
@@ -172,15 +193,23 @@ def start_paimon_service(data_dir: Path) -> None:
     log.close()
 
 
+def start_voice_service(data_dir: Path) -> None:
+    if selected_voice(data_dir) in cosyvoice_local.VOICES:
+        cosyvoice_local.start(data_dir)
+    else:
+        start_paimon_service(data_dir)
+
+
 def stop_paimon_service() -> None:
     global _PAIMON_PROCESS
     if _PAIMON_PROCESS and _PAIMON_PROCESS.poll() is None:
-        _PAIMON_PROCESS.terminate()
-        try:
-            _PAIMON_PROCESS.wait(timeout=8)
-        except subprocess.TimeoutExpired:
-            _PAIMON_PROCESS.kill()
+        cosyvoice_local.stop_owned_process(_PAIMON_PROCESS)
     _PAIMON_PROCESS = None
+
+
+def stop_voice_services() -> None:
+    stop_paimon_service()
+    cosyvoice_local.stop()
 
 
 def warm_voice(data_dir: Path) -> None:
@@ -408,6 +437,16 @@ def _english_wav_chunks(text: str, data_dir: Path,
 
 def synthesize_chunks(text: str, data_dir: Path,
                       cancelled: Callable[[], bool] | None = None):
+    voice = selected_voice(data_dir)
+    if voice in cosyvoice_local.VOICES:
+        for part in _cosyvoice_parts(text):
+            if cancelled and cancelled():
+                raise SynthesisCancelled
+            result = cosyvoice_local.synthesize(part, data_dir, voice, cancelled)
+            if result is None:
+                raise SynthesisCancelled
+            yield _cosyvoice_device_wav(*result)
+        return
     if selected_voice(data_dir) == "paimon":
         if not paimon_status(data_dir)["ready"]:
             raise RuntimeError("派蒙本地语音服务未就绪，请稍后重试或手动切换声线")
@@ -420,6 +459,48 @@ def synthesize_chunks(text: str, data_dir: Path,
         yield from _kokoro_wav_chunks(text, data_dir, cancelled)
     else:
         yield synthesize_wav(text, data_dir, cancelled)
+
+
+def _cosyvoice_parts(text: str, limit: int = 160):
+    """Preserve short utterances; the old 18-character lead-in cuts English clauses."""
+    remaining = text.strip()
+    while remaining:
+        if len(remaining) <= limit:
+            yield remaining
+            return
+        boundary = max((remaining.rfind(mark, 0, limit + 1) + 1
+                        for mark in "。！？!?；;\n"), default=0)
+        if boundary < limit // 2:
+            boundary = remaining.rfind(" ", 0, limit + 1)
+        if boundary < limit // 2:
+            boundary = limit
+        yield remaining[:boundary].strip()
+        remaining = remaining[boundary:].strip()
+
+
+def _cosyvoice_device_wav(samples: np.ndarray, sample_rate: int) -> bytes:
+    """Match speech loudness without turning one plosive into whole-clip attenuation."""
+    wav = _to_device_wav(samples, sample_rate, gain=1.0)
+    signal = _wav_samples(wav) / 32768.0
+    if not signal.size or not np.isfinite(signal).all():
+        raise RuntimeError("本地语音样本无效")
+    peak = float(np.max(np.abs(signal)))
+    active = signal[np.abs(signal) >= max(0.0001, peak * 0.04)]
+    if not active.size:
+        return wav
+    ceiling, target = 0.06, 0.025
+    low, high = 0.0, 20.0
+    for _ in range(20):
+        gain = (low + high) / 2
+        rms = float(np.sqrt(np.mean(np.square(ceiling * np.tanh(active * gain / ceiling)))))
+        if rms < target:
+            low = gain
+        else:
+            high = gain
+    # The validated robot audition used 60% of this baseline with the display
+    # paused. Make that the new 100% UI ceiling for this voice only.
+    limited = 0.6 * ceiling * np.tanh(signal * ((low + high) / 2) / ceiling)
+    return _to_device_wav(limited, 16000, gain=1.0)
 
 
 def _paimon_language(text: str) -> str:

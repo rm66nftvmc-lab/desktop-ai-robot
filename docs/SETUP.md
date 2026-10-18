@@ -48,9 +48,13 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install_dsh_plugin.ps1
 .\.venv\Scripts\python.exe -c "from faster_whisper import WhisperModel; from pathlib import Path; import os; WhisperModel('small', device='cpu', compute_type='int8', download_root=str(Path(os.environ['LOCALAPPDATA']) / 'DesktopAiRobot' / 'models'))"
 # 可选：派蒙 GPT-SoVITS（约 13 GB，独立 venv + CUDA）
 powershell -ExecutionPolicy Bypass -File .\scripts\setup_paimon_tts.ps1
+# 可选：球球 CosyVoice 3（免费本地中英文/广东话，独立 venv + CUDA）
+powershell -ExecutionPolicy Bypass -File .\scripts\setup_cosyvoice_tts.ps1
 ```
 
 音频输出设置（音量/静音）、访问密钥、消息库、录音模型都在同一数据目录；**不要**把它们提交到 Git。
+
+球球声线来源、许可、安装和方言限制见 [LOCAL_COSYVOICE.md](LOCAL_COSYVOICE.md)。它是开源本地候选，不是云端龙安欢 V3；安徽话尚未提供。
 
 ### 1.4 首次启动
 

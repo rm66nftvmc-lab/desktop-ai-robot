@@ -25,8 +25,8 @@ from .security import (SESSION_SECONDS, Sessions, anchor_path, load_or_create_to
                        record_or_verify_data_dir, resolve_data_dir)
 from .speech import SpeechWorker
 from .storage import add_message, initialize, list_messages, set_delivery, get_setting, set_setting
-from .tts import (SynthesisCancelled, set_selected_voice, synthesize_chunks,
-                  start_paimon_service, stop_paimon_service, voice_status,
+from .tts import (SynthesisCancelled, selected_voice, set_selected_voice, synthesize_chunks,
+                  start_voice_service, stop_voice_services, voice_status,
                   warm_voice)
 from .voice import VoiceConversation
 from .runtime import RuntimeStatus
@@ -130,6 +130,7 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
     device = DeviceLink(speech.enqueue, lambda generation: voice.on_listen_start(generation),
                         audio_output=audio_output, on_disconnect=lambda: voice.on_device_disconnect())
     device.set_theme(1 if get_setting(database, 'display_theme') == 'qiuqiu' else 0)
+    device.set_quiet_playback(selected_voice(data_dir).startswith('cosyvoice'))
     voice = VoiceConversation(database, data_dir, device, hermes, audio_output=audio_output,
                               workers={"hermes": hermes, "deepseek_harness": harness},
                               validate_target=conversations.resolve)
@@ -146,9 +147,9 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         try:
-            start_paimon_service(data_dir)
-        except OSError:
-            logger.exception("Could not start optional local Paimon TTS; keeping the current voice")
+            start_voice_service(data_dir)
+        except (OSError, RuntimeError):
+            logger.exception("Could not start optional local TTS; keeping the current voice")
         warm_voice(data_dir)
         try:
             harness.client.start()
@@ -168,7 +169,7 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
             harness.stop()
             harness.client.stop()
             voice.stop()
-            stop_paimon_service()
+            stop_voice_services()
 
     app = FastAPI(title="Desktop AI Robot Bridge", docs_url=None, redoc_url=None, lifespan=lifespan)
     app.state.device = device
@@ -364,6 +365,7 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
         check_origin(request)
         try:
             set_selected_voice(data_dir, body.voice)
+            device.set_quiet_playback(body.voice.startswith('cosyvoice'))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except RuntimeError as exc:

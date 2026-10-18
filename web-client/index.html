@@ -98,8 +98,19 @@
               <select id="voice-select">
                 <option value="kokoro">Kokoro 中文女声</option>
                 <option value="paimon" disabled>派蒙</option>
+                <option value="cosyvoice" disabled>球球 · 普通话 / English</option>
+                <option value="cosyvoice-yue" disabled>球球 · 广东话</option>
               </select>
               <form id="tts-form" class="stack-form">
+                <div id="voice-presets" class="stack-form" hidden>
+                  <label for="voice-test-language">试听语言</label>
+                  <select id="voice-test-language">
+                    <option value="zh">普通话</option>
+                    <option value="en">English</option>
+                    <option value="mixed">中英混合</option>
+                    <option value="yue">广东话</option>
+                  </select>
+                </div>
                 <label for="speak-text">测试语音</label>
                 <input id="speak-text" maxlength="300" value="你好，我是桌面机器人。">
                 <button type="submit" class="secondary-button">播放测试语音</button>

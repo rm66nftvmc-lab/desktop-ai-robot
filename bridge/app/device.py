@@ -79,6 +79,9 @@ class DeviceLink:
         }
         self._pending_face: int | None = None
         self._pending_animation: bool | None = None
+        self._animation_requested = True
+        self._animation_sent: bool | None = None
+        self._quiet_playback = False
         self._desired_theme = 0
         self._pending_theme = 0
         self._state['display_theme'] = None
@@ -135,14 +138,23 @@ class DeviceLink:
 
     def set_animation(self, enabled: bool) -> None:
         with self._lock:
+            self._animation_requested = enabled
             self._pending_animation = enabled
+
+    def set_quiet_playback(self, enabled: bool) -> None:
+        with self._lock:
+            self._quiet_playback = enabled
 
     def _send_pending_animation(self, port, sequence: int) -> int:
         with self._lock:
-            enabled = self._pending_animation
-            if enabled is None or not self._state["connected"]:
+            if not self._state["connected"]:
+                return sequence
+            speaking = self._state['playing'] or self._state['device_playing']
+            enabled = self._animation_requested and not (self._quiet_playback and speaking)
+            if enabled == self._animation_sent and self._pending_animation is None:
                 return sequence
             self._pending_animation = None
+            self._animation_sent = enabled
         port.write(protocol.encode(protocol.ANIMATION, sequence, bytes([enabled])))
         return (sequence + 1) & 0xFFFF
 
@@ -226,6 +238,7 @@ class DeviceLink:
 
     def _connection_lost(self) -> None:
         with self._lock:
+            self._animation_sent = None
             active = self._state["connected"] or self._state["listening"] or self._state["playing"]
             self._capture_generation += 1
             self._capture.clear()
