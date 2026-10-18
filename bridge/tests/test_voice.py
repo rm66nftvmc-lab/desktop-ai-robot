@@ -60,6 +60,30 @@ class FakeDevice:
         pass
 
 
+def test_empty_transcript_returns_screen_to_ready_instead_of_thinking(tmp_path):
+    database=tmp_path/'messages.sqlite3'
+    initialize(database)
+    device=FakeDevice()
+    voice=VoiceConversation(database,tmp_path,device,FakeHermes())
+    voice.on_listen_start(1)
+    voice.on_transcript('   ',1)
+    assert device.faces[-1]==faces.READY
+    assert voice.snapshot()['state']=='idle'
+
+
+def test_resuming_approved_voice_request_keeps_thinking_expression(tmp_path):
+    database=tmp_path/'messages.sqlite3'
+    initialize(database)
+    device,hermes=FakeDevice(),FakeHermes()
+    voice=VoiceConversation(database,tmp_path,device,hermes)
+    voice.on_listen_start(1)
+    voice.on_transcript('检查文件',1)
+    hermes.approval={'request_id':'approve-one','message_id':hermes.jobs[-1][0]}
+    voice.on_listen_start(2)
+    voice.on_transcript('同意审批',2)
+    assert device.faces[-1]==faces.THINK
+
+
 def test_muted_voice_still_sends_text_and_does_not_replay_old_queue(tmp_path, monkeypatch):
     database = tmp_path / "messages.sqlite3"
     initialize(database)

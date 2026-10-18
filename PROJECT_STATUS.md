@@ -2,6 +2,14 @@
 
 Last updated: 2026-10-18
 
+## Qiuqiu state expressions (2026-10-18)
+
+- Firmware `voice-device-1.10`: recording uses wide symmetric attentive eyes; thinking uses an upward gaze, asymmetric squint and three animated dots; speaking uses softened eyes and an opening mouth driven by the outgoing PCM energy. Silent audio and playback completion close the mouth. The original character is retained unchanged.
+- All eye position, shape, tilt, dot opacity and mouth changes retarget from the currently displayed pose using time-based smoothing (~270 ms to 95% of a change). Interrupting a transition does not jump to a fixed starting frame.
+- Sphere entry draws a complete frame; normal updates rebuild only the fixed face region from its original texture before a single opaque SPI transfer. Recording remains animated. USB audio processing yields between frames so a continuous playback queue cannot starve display updates or the button.
+- Recording stop enters THINK directly. Accepted voice approval resumes THINK; denied approval and empty transcriptions return READY. Stale host face commands cannot override the recording expression.
+- Backend regression verification: **133 Python tests passed**, including approval and empty-transcription screen states. Firmware built and uploaded successfully. Hardware expression previews reported LISTEN/THINK at ~30.3 fps, CRC 0, ~5.6 ms region transfers. The spoken test completed with 187/187 audio acknowledgements and no disconnect. Physical expression/transition confirmation is a user check.
+
 ## Qiuqiu display and incremental answers (2026-10-18)
 
 - Firmware `voice-device-1.9` preserves the original character and all 64 cached poses, and adds an independently rendered Qiuqiu sphere theme. Continuous eye movement and blinking render at measured **30.3 new frames/second** (91 frames per ~3 seconds); a whole opaque buffer is sent without clearing between frames. Texture generation is reproducible with `scripts/build_qiuqiu.py`. Recording freezes the display to protect microphone capture; speaking keeps animation enabled.

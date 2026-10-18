@@ -8,6 +8,7 @@
 #include "faces.h"
 #include "screen_assets.h"
 #include "qiuqiu_assets.h"
+#include "qiuqiu_motion.h"
 #include <math.h>
 
 // USB CDC: A5 5A | type | seq LE | length LE | payload | CRC16-CCITT LE.
@@ -154,59 +155,87 @@ static void lcdPresentCachedFrame() {
   ++lcdPresents;
 }
 
-// A complete opaque frame is composed before any SPI write. No blank frame.
-// Eyes move continuously at 30 Hz; no repeated GIF poses or runtime allocation.
+// Every update is opaque and precomposed. Only theme entry transfers the full
+// sphere; normal updates touch the eye/mouth area, including while recording.
+static qiuqiu::Motion qiuqiuMotion;
+static bool qiuqiuNeedsFull=true;
+static float speakerEnvelope=0;
+static uint32_t speakerEnvelopeAt=0;
+
+static qiuqiu::Mood qiuqiuMood() {
+  switch(currentFace) {
+    case FACE_ID_LISTEN:return qiuqiu::Mood::Listen;
+    case FACE_ID_THINK:return qiuqiu::Mood::Think;
+    case FACE_ID_SPEAK:return qiuqiu::Mood::Speak;
+    case FACE_ID_SLEEP:return qiuqiu::Mood::Sleep;
+    case FACE_ID_APPROVE:return qiuqiu::Mood::Approve;
+    case FACE_ID_ERROR:return qiuqiu::Mood::Error;
+    default:return qiuqiu::Mood::Idle;
+  }
+}
+
+static void qiuqiuInk(int x,int y,float coverage) {
+  if (x<40||x>153||y<42||y>146||coverage<=0) return;
+  coverage=fminf(1.f,coverage);
+  const int offset=((191-x)*192+y)*2;
+  uint16_t bg=(lcdFrameBytes[offset]<<8)|lcdFrameBytes[offset+1];
+  uint16_t fg=0x2125;
+  int r=((bg>>11)&31)*(1-coverage)+((fg>>11)&31)*coverage;
+  int g=((bg>>5)&63)*(1-coverage)+((fg>>5)&63)*coverage;
+  int b=(bg&31)*(1-coverage)+(fg&31)*coverage;
+  uint16_t color=(r<<11)|(g<<5)|b;
+  lcdFrameBytes[offset]=color>>8; lcdFrameBytes[offset+1]=color;
+}
+
 static void lcdDrawQiuqiu() {
   if (!lcdFrameBytes) return;
-  const uint32_t started=micros();
-  const float t=millis()*.001f;
-  for (int y=0;y<192;++y) for (int x=0;x<192;++x) {
+  const uint32_t started=micros(),now=millis();
+  const bool full=qiuqiuNeedsFull;
+  // Logical bounds cover every pose and its antialiased edge. Rebuild from
+  // texture each time so no eye, mouth or dot trails survive a transition.
+  const int lx0=full?0:40,lx1=full?191:153,ly0=full?0:42,ly1=full?191:146;
+  for (int y=ly0;y<=ly1;++y) for (int x=lx0;x<=lx1;++x) {
     uint16_t color=pgm_read_word(&QIUQIU_TEXTURE[y*192+x]);
-    // Match the original asset's counterclockwise screen orientation.
     const int offset=((191-x)*192+y)*2;
     lcdFrameBytes[offset]=color>>8; lcdFrameBytes[offset+1]=color;
   }
-  float phase=fmodf(t,4.6f);
-  float blink=phase<.22f ? fabsf(phase-.11f)/.11f : 1.f;
-  if (currentFace==FACE_ID_SLEEP) blink=.12f;
-  const float gazeX=sinf(t*.73f)*3.5f;
-  const float gazeY=sinf(t*1.2f)*1.8f;
-  for (int eye=0;eye<2;++eye) {
-    float cx=(eye?118.f:76.f)+gazeX;
-    float cy=(eye?83.f:91.f)+gazeY;
-    float half=(eye?10.f:13.f)*blink;
-    float radius=eye?4.f:5.f;
-    if (currentFace==FACE_ID_LISTEN) half*=1.2f;
-    if (currentFace==FACE_ID_SPEAK) half*=.8f+.2f*sinf(t*9.f);
-    if (currentFace==FACE_ID_THINK) cy+=sinf(t*3.f+eye)*2.f;
-    if (currentFace==FACE_ID_ERROR) half=4;
-    const float tilt=eye?-.18f:-.25f;
-    for (int y=int(cy-half-radius-7);y<=int(cy+half+radius+7);++y)
-      for (int x=int(cx-radius-10);x<=int(cx+radius+10);++x) {
-        if (x<0||x>=192||y<0||y>=192) continue;
-        float dx=x-cx,dy=y-cy;
-        float u=dx-tilt*dy,v=dy+tilt*dx;
-        float q=fmaxf(0.f,fabsf(v)-half);
-        float coverage=fminf(1.f,fmaxf(0.f,radius+.5f-sqrtf(u*u+q*q)));
-        if (coverage<=0) continue;
-        int offset=((191-x)*192+y)*2;
-        uint16_t bg=(lcdFrameBytes[offset]<<8)|lcdFrameBytes[offset+1];
-        uint16_t fg=currentFace==FACE_ID_ERROR?0x8828:0x2125;
-        int r=((bg>>11)&31)*(1-coverage)+((fg>>11)&31)*coverage;
-        int g=((bg>>5)&63)*(1-coverage)+((fg>>5)&63)*coverage;
-        int b=(bg&31)*(1-coverage)+(fg&31)*coverage;
-        uint16_t color=(r<<11)|(g<<5)|b;
-        lcdFrameBytes[offset]=color>>8; lcdFrameBytes[offset+1]=color;
+  float energy=(playing && now-speakerEnvelopeAt<180)?speakerEnvelope:0;
+  const auto &pose=qiuqiuMotion.step(qiuqiuMood(),now,energy);
+  for (const auto &e:pose.eyes) {
+    for (int y=int(e.y-e.half-e.radius-10);y<=int(e.y+e.half+e.radius+10);++y)
+      for (int x=int(e.x-e.radius-12);x<=int(e.x+e.radius+12);++x) {
+        float dx=x-e.x,dy=y-e.y;
+        // Normalize rotation so eye thickness doesn't change with tilt.
+        float norm=1/sqrtf(1+e.tilt*e.tilt);
+        float u=(dx-e.tilt*dy)*norm,v=(dy+e.tilt*dx)*norm;
+        float q=fmaxf(0.f,fabsf(v)-e.half);
+        qiuqiuInk(x,y,e.radius+.5f-sqrtf(u*u+q*q));
       }
   }
+  for(int i=0;i<3;++i) for(int y=47;y<=55;++y) for(int x=84+i*12;x<=92+i*12;++x) {
+    float dx=x-(88+i*12),dy=y-51;
+    qiuqiuInk(x,y,fminf(1.f,fmaxf(0.f,3.4f-sqrtf(dx*dx+dy*dy)))*pose.dots[i]);
+  }
+  // Speech energy comes from PCM sent to I2S; silent gaps close the mouth.
+  float ry=1+pose.mouth*8;
+  for(int y=118;y<=138;++y) for(int x=83;x<=109;++x) {
+    float dx=(x-96)/10.f,dy=(y-128)/ry;
+    qiuqiuInk(x,y,fminf(1.f,fmaxf(0.f,(1-sqrtf(dx*dx+dy*dy))*ry))*fminf(1.f,pose.mouth*5));
+  }
+  // Rotate bounds in the same orientation as the retained original theme.
+  const int x0=ly0,x1=ly1,y0=191-lx1,y1=191-lx0;
+  const int rowBytes=(x1-x0+1)*2;
+  for(int y=y0;y<=y1;++y)
+    memmove(lcdFrameBytes+(y-y0)*rowBytes,lcdFrameBytes+(y*192+x0)*2,rowBytes);
   lcdComposeUs=micros()-started;
-  lcdCachedLength=192*192*2;
+  lcdCachedLength=rowBytes*(y1-y0+1);
   ++lcdSourceUpdates;
   const uint32_t pushStarted=micros();
-  lcdSetWindow(24,64,215,255);
+  lcdSetWindow(24+x0,64+y0,24+x1,64+y1);
   lcdBeginPixels(); SPI.writeBytes(lcdFrameBytes,lcdCachedLength); lcdEndPixels();
   lcdPushUs=micros()-pushStarted;
   ++lcdPresents; ++currentFaceFrame;
+  qiuqiuNeedsFull=false;
 }
 
 static bool lcdDecodeFrame(const ScreenCompressedFrame &frame,uint8_t *output) {
@@ -289,8 +318,8 @@ static void lcdDrawFace(int index) {
 static void lcdTickAnimation() {
   const uint32_t elapsed=millis()-lastFaceFrameAt;
   if (displayTheme==1) {
-    // Recording keeps the display still to prioritize microphone samples.
-    if (!animationEnabled || listening || elapsed<33) return;
+    // Dirty-region updates keep recording animated without full-screen SPI stalls.
+    if (!animationEnabled || elapsed<33) return;
     lastFaceFrameAt+=elapsed/33*33;
     lcdDrawQiuqiu();
     return;
@@ -378,10 +407,11 @@ static void handleFrame(uint8_t kind,const uint8_t *payload,uint16_t length) {
   if (kind==FRAME_WELCOME && length==14 && memcmp(payload,"{\"protocol\":1}",14)==0) {
     connected=true; lastHost=millis(); lcdDrawFace(FACE_ID_READY);
   } else if (kind==FRAME_FACE && connected && length==1) {
-    lcdDrawFace(payload[0]);
+    lcdDrawFace(listening?FACE_ID_LISTEN:payload[0]);
   } else if (kind==FRAME_THEME && connected && length==1 && payload[0]<=1) {
     if (displayTheme!=payload[0]) {
       displayTheme=payload[0];
+      qiuqiuNeedsFull=true;
       if (displayTheme==1) lcdFill(0x0843); else lcdDrawBackground();
       int face=currentFace; currentFace=-1; lcdDrawFace(face);
     }
@@ -396,11 +426,15 @@ static void handleFrame(uint8_t kind,const uint8_t *payload,uint16_t length) {
     ++receivedAudio;
     if (!playing) { playing=true; lcdDrawFace(FACE_ID_SPEAK); }
     int16_t stereo[1024];
+    uint64_t energySum=0;
     size_t count=length/2;
     for (size_t i=0;i<count;++i) {
       int16_t value=static_cast<int16_t>(payload[2*i]|(static_cast<uint16_t>(payload[2*i+1])<<8));
       stereo[2*i]=value; stereo[2*i+1]=value;
+      energySum+=static_cast<int64_t>(value)*value;
     }
+    speakerEnvelope=fminf(1.f,sqrtf(static_cast<float>(energySum)/count)/1600.f);
+    speakerEnvelopeAt=millis();
     size_t written=0;
     i2s_write(I2S_NUM_1,stereo,count*4,&written,pdMS_TO_TICKS(100));
     const uint8_t ok=written==count*4 ? 1 : 0;
@@ -413,6 +447,7 @@ static void handleFrame(uint8_t kind,const uint8_t *payload,uint16_t length) {
 }
 
 static void pollHost() {
+  const uint32_t started=micros();
   while (Serial.available()) {
     int incoming=Serial.read();
     if (incoming<0) break;
@@ -440,6 +475,9 @@ static void pollHost() {
       size_t consumed=valid?frameLength:1;
       rxLength-=consumed;
       memmove(rxBuffer,rxBuffer+consumed,rxLength);
+      // A steady audio queue must yield between frames so expressions and
+      // button input are serviced even while the speaker DMA is draining.
+      if (micros()-started>=6000) return;
     }
   }
 }
@@ -459,7 +497,7 @@ static void pollButton() {
       listening=!listening;
       const uint8_t state=listening?1:0;
       sendFrame(FRAME_BUTTON,&state,1);
-      lcdDrawFace(listening?FACE_ID_LISTEN:FACE_ID_READY);
+      lcdDrawFace(listening?FACE_ID_LISTEN:FACE_ID_THINK);
     }
   }
 }
@@ -496,7 +534,7 @@ void loop() {
   pollButton();
   if (!connected && millis()-lastHello>=2000) {
     lastHello=millis();
-      sendJson(FRAME_HELLO,"{\"protocol\":1,\"firmware\":\"voice-device-1.9\"}");
+      sendJson(FRAME_HELLO,"{\"protocol\":1,\"firmware\":\"voice-device-1.10\"}");
   }
   if (connected && millis()-lastStatus>=3000) {
     lastStatus=millis();

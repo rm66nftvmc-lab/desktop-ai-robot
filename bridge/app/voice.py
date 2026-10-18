@@ -160,12 +160,13 @@ class VoiceConversation:
                 self._approval_target = None
                 self._state = ("waiting_for_hermes" if target["source"] == "hermes" else "waiting_for_agent") if accepted else "error"
                 self._last_error = None if accepted else error
-            self.device.set_face(faces.READY if accepted else faces.ERROR)
+            self.device.set_face((faces.THINK if choice == "once" else faces.READY) if accepted else faces.ERROR)
             return
         with self._lock:
             if not text.strip():
                 self._state = "idle"
                 self._last_error = "未识别到语音"
+                self.device.set_face(faces.READY)
                 return
             self._state = "sending"
         worker = self.workers.get(target["source"])
