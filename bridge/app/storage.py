@@ -2,11 +2,14 @@
 
 import sqlite3
 from pathlib import Path
+from .maintenance import SCHEMA_VERSION
 
 
 def initialize(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(path) as db:
+        if db.execute("PRAGMA user_version").fetchone()[0] > SCHEMA_VERSION:
+            raise RuntimeError("数据库版本高于当前 Bridge，已停止写入")
         db.execute(
             """CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -37,6 +40,7 @@ def initialize(path: Path) -> None:
                    "native_id TEXT, title TEXT NOT NULL, created_at REAL NOT NULL)")
         db.execute("CREATE TABLE IF NOT EXISTS deleted_sessions (source TEXT NOT NULL, native_id TEXT NOT NULL, "
                    "PRIMARY KEY (source, native_id))")
+        db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
 
 
 def add_message(path: Path, source: str, text: str, *, role: str = "user",

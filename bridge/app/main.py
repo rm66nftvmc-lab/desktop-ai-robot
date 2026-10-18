@@ -29,6 +29,7 @@ from .tts import (SynthesisCancelled, set_selected_voice, synthesize_chunks,
                   warm_voice)
 from .voice import VoiceConversation
 from .runtime import RuntimeStatus
+from .maintenance import BRIDGE_VERSION, MaintenanceStatus, check_database
 
 SOURCES = ("hermes", "deepseek_harness", "doubao_web")
 WEB_DIR = Path(__file__).resolve().parents[2] / "web-client"
@@ -96,7 +97,11 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
                 data_dir_record["path"], data_dir_source,
                 data_dir_record.get("anchor", "-"), data_dir_record.get("anchored", "-"))
     database = data_dir / "messages.sqlite3"
+    database_check = check_database(database)
     initialize(database)
+    if database_check["state"] == "new":
+        database_check["state"] = "ok"
+    maintenance = MaintenanceStatus(data_dir, database_check)
     sessions = Sessions(token or load_or_create_token(data_dir))
     speech = SpeechWorker(data_dir / "models")
     api_key_file = data_dir / "hermes-api-key.txt"
@@ -191,7 +196,7 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
 
     @app.get("/health")
     def health() -> dict:
-        return {"ok": True}
+        return {"ok": True, "version": BRIDGE_VERSION}
 
     @app.post("/api/login")
     def login(body: LoginBody, request: Request, response: Response) -> dict:
@@ -217,6 +222,7 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
     def status() -> dict:
         result = {
             "bridge": "ready",
+            "maintenance": maintenance.snapshot(),
             "device": device.snapshot(),
             "speech": speech.snapshot(),
             "voice": voice.snapshot(),

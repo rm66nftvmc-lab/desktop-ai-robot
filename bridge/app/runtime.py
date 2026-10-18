@@ -82,5 +82,6 @@ class RuntimeStatus:
             "audio_output": status["audio_output"],
             "tts": selected(status["tts"], ("active", "ready", "english_ready", "paimon_ready")),
             "store": {"consistent": status["store"]["consistent"]},
+            "maintenance": status.get("maintenance", {}),
             "events": events,
         }

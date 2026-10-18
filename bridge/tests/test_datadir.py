@@ -88,7 +88,7 @@ def test_create_app_with_an_explicit_dir_never_touches_the_anchor(tmp_path, monk
     monkeypatch.setenv(ANCHOR_ENV, str(anchor))
     client = TestClient(create_app(tmp_path / "store", token="test-access-token-for-bridge"),
                         base_url="http://127.0.0.1")
-    assert client.get("/health").json() == {"ok": True}
+    assert client.get("/health").json()["ok"] is True
     assert not anchor.exists()
 
 

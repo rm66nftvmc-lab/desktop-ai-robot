@@ -74,7 +74,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start_bridge.ps1 -Restart
 ```
 
 脚本会先把数据目录钉在 `%PROGRAMDATA%\DesktopAiRobot\data-dir.txt` 记录的位置，再启动 uvicorn。
-日志写在数据目录的 `bridge.stdout.log` / `bridge.stderr.log`，Harness Host 日志为 `harness-bridge.log`。
+Bridge 运行日志为数据目录内的 `bridge.runtime.log`，达到 2 MiB 自动轮转，保留 `.1` 至 `.3` 三份历史。
+`bridge.stdout.log` / `bridge.stderr.log` 捕获启动与第三方标准输出，每次启动前保留最近三份历史；Harness Host 日志 `harness-bridge.log` 独立管理。
 
 手动启动等价于：
 
@@ -143,7 +144,7 @@ powershell -ExecutionPolicy Bypass -File ..\scripts\start_bridge.ps1
 
 ```powershell
 # 1) 离线测试（不需要硬件）
-.\.venv\Scripts\python.exe -m pytest bridge\tests -q     # 当前 108 passed
+.\.venv\Scripts\python.exe -m pytest bridge\tests -q     # 当前 116 passed
 
 # 2) 服务健康
 Invoke-RestMethod http://127.0.0.1:8787/health
@@ -234,3 +235,16 @@ node --test web-client\tests\ui-state.test.cjs
 ```
 
 USB 断开后，旧录音与播报失效；已经发送的 AI 消息继续保留在文字会话，重连后不会自动重发。请求超时不能等同于“没有执行”，请先核对会话再手动重试。Harness 已永久删除会话的确认 ID 保存在本机数据库，用于过滤 Host 内存目录的旧条目，不保存聊天副本或归档。
+
+
+## 7. Bridge 0.2.0 数据与日志维护
+
+正式启动入口仍是 `start-robot.cmd` 或 `scripts/start_bridge.ps1`，内部使用 `python -m bridge.run` 并限制监听回环地址。手动使用旧 uvicorn 命令启动可继续工作，但不会加载新的日志轮转配置。
+
+启动前对现有数据库执行只读 `quick_check`，检查预算约 3 秒。损坏或版本高于当前程序时停止启动，保留原数据库；不会自动重建、覆盖或恢复聊天记录。临时占用或检查超时会标记为 `deferred`，可在诊断里看到，稍后重启复查。启动检查通过只说明当时的完整性，不代表运行中的数据库会被持续扫描。
+
+诊断增加版本、运行时长、数据库检查结果、日志大小与磁盘剩余空间。空间低于 1 GiB 时网页提示；本程序不自动删除聊天、模型或其他文件。聊天记录不做自动备份，继续遵守永久删除规则。
+
+日志轮转只管理 Bridge 自己的运行日志与启动输出；派蒙、Harness 等独立进程的日志不在这个轮转策略内。运行日志可能包含本机路径和异常堆栈，请使用“下载连接诊断”分享故障信息，不要直接上传原始日志或数据目录。
+
+故障测试使用临时数据库和临时数据锚点；不要用真实数据目录执行破坏性的数据库修复实验。

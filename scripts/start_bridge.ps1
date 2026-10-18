@@ -18,7 +18,7 @@
 param(
     [switch]$Restart,
     [switch]$OpenBrowser,
-    [int]$Port = 8787
+    [ValidateRange(1, 65535)][int]$Port = 8787
 )
 
 $ErrorActionPreference = 'Stop'
@@ -54,8 +54,9 @@ function Stop-OwnedProcess([int]$processId, [string]$expectedPattern, [string]$l
 }
 
 $bridgeOwner = Get-PortOwner $Port
+$bridgePattern = 'bridge\.app\.main:app|\-m\s+bridge\.run(?:\s|$)'
 if ($Restart -and $bridgeOwner) {
-    Stop-OwnedProcess $bridgeOwner 'bridge\.app\.main:app' 'Bridge'
+    Stop-OwnedProcess $bridgeOwner $bridgePattern 'Bridge'
     $releaseDeadline = (Get-Date).AddSeconds(10)
     while ((Get-PortOwner $Port) -and (Get-Date) -lt $releaseDeadline) {
         Start-Sleep -Milliseconds 300
@@ -63,6 +64,11 @@ if ($Restart -and $bridgeOwner) {
     $bridgeOwner = Get-PortOwner $Port
 }
 if ($bridgeOwner) {
+    if ((Get-CommandLine $bridgeOwner) -notmatch $bridgePattern) {
+        throw "Port $Port is owned by another application; refusing to treat it as Bridge."
+    }
+    $health = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/health" -TimeoutSec 3
+    if ($health.ok -ne $true) { throw 'The listening Bridge failed its health check.' }
     Write-Host "Bridge already listening on http://127.0.0.1:$Port (PID $bridgeOwner)."
     Write-Host 'Use -Restart to reload code, models or the Harness plugin.'
     if ($OpenBrowser) { Start-Process "http://127.0.0.1:$Port/" }
@@ -119,10 +125,11 @@ if (-not $plugin) {
 }
 
 $env:ROBOT_DATA_DIR = $dataDir
+& $python -c "from bridge.run import rotate_startup_logs; from bridge.app.security import resolve_data_dir; rotate_startup_logs(resolve_data_dir()[0])"
+if ($LASTEXITCODE -ne 0) { throw 'Bridge startup log rotation failed' }
 $stdout = Join-Path $dataDir 'bridge.stdout.log'
 $stderr = Join-Path $dataDir 'bridge.stderr.log'
-$arguments = @('-m', 'uvicorn', 'bridge.app.main:app', '--host', '127.0.0.1',
-               '--port', "$Port", '--no-access-log')
+$arguments = @('-m', 'bridge.run', '--port', "$Port")
 
 Write-Host "Starting Bridge on http://127.0.0.1:$Port ..."
 $process = Start-Process -FilePath $python -ArgumentList $arguments -WorkingDirectory $repo `
@@ -143,6 +150,8 @@ while ((Get-Date) -lt $deadline) {
 if (-not $ready) {
     Write-Host 'Bridge did not become ready. Last error output:' -ForegroundColor Red
     if (Test-Path -LiteralPath $stderr) { Get-Content -LiteralPath $stderr -Tail 40 }
+    $runtimeLog = Join-Path $dataDir 'bridge.runtime.log'
+    if (Test-Path -LiteralPath $runtimeLog) { Get-Content -LiteralPath $runtimeLog -Tail 30 }
     throw 'Bridge startup failed.'
 }
 
@@ -150,5 +159,6 @@ Write-Host ''
 Write-Host "Bridge ready: http://127.0.0.1:$Port  (PID $($process.Id))" -ForegroundColor Green
 Write-Host "Access key:   $(Join-Path $dataDir 'access-token.txt')"
 Write-Host "Logs:         $stderr"
+Write-Host "Runtime log:  $(Join-Path $dataDir 'bridge.runtime.log') (2 MB x 4 files maximum)"
 Write-Host "Device / TTS state: open the page, log in, then GET /api/status"
 if ($OpenBrowser) { Start-Process "http://127.0.0.1:$Port/" }

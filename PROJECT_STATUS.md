@@ -2,6 +2,14 @@
 
 Last updated: 2026-10-18
 
+## Bridge maintenance release 0.2.0 (2026-10-18)
+
+- Database startup now runs a time-bounded, read-only integrity check. Corrupt databases and schemas from a newer Bridge are refused without replacement or downgrade. A temporarily busy check is reported as deferred. Schema version 1 preserves existing messages.
+- Production startup uses `python -m bridge.run`. Bridge runtime logs rotate at 2 MiB with three retained archives (four files total); startup stdout/stderr retain three previous runs. AI model and Harness logs are separate. Existing-listener detection verifies the process and health endpoint before declaring Bridge ready.
+- Authenticated status/diagnostics include Bridge version, uptime, startup database-check result, database/log sizes and free disk space. A low-space warning appears below 1 GiB; no automatic data deletion or chat backups are introduced.
+- Pytest import-time application creation is now isolated from the real data store and the installed Harness executable.
+- Verification: **116 Python tests and 6 Node tests passed**. Live launch, device handshake, version/diagnostic checks and repeated-start detection passed. No speech or firmware settings were changed.
+
 ## Latest update (2026-10-18)
 
 - Added shared task status: recording, local transcription, waiting for AI, approval, generating speech, playback, completion, failure, and interruption.

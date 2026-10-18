@@ -34,6 +34,10 @@ def main():
     output = args.output or data_dir / f"robot-diagnostics-{datetime.now():%Y%m%d-%H%M%S}.json"
     output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print("Bridge:", report["bridge"], "| Device:", report["device"]["connected"], "| Task:", report["task"]["state"])
+    maintenance = report.get("maintenance", {})
+    if maintenance:
+        print("Version:", maintenance["version"], "| Database:", maintenance["database"]["state"],
+              "| Low disk space:", maintenance["low_disk_space"])
     print("Report saved:", output)
 
 

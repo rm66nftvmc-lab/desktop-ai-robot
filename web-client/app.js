@@ -555,6 +555,12 @@ async function refreshStatus() {
     const task = status.task || { label: "准备就绪", state: "idle" };
     $("#task-status").textContent = task.detail ? `${task.label} · ${task.detail}` : task.label;
     $("#task-status").dataset.state = task.state;
+    const maintenance = status.maintenance || {};
+    $("#task-status").title = maintenance.version ? `Bridge ${maintenance.version}` : "";
+    const warning = maintenance.low_disk_space ? "磁盘剩余空间不足 1 GB，请清理后继续使用。" :
+      maintenance.database?.state === "deferred" ? "启动时数据库检查因忙碌或超时暂缓，请稍后重启复查。" : "";
+    $("#maintenance-warning").textContent = warning;
+    $("#maintenance-warning").hidden = !warning;
     if (!audioPending && !volumeTimer && status.audio_output) renderAudioOutput(status.audio_output);
     const voiceStatus = status.tts || {};
     const paimonOption = $("#voice-select option[value='paimon']");
