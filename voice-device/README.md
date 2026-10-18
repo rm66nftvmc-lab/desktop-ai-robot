@@ -175,8 +175,10 @@ cd D:\Codex工作区\desktop-ai-robot
 | `0x0C FACE` | 电脑→设备 | 单字节表情编号，取值见 `faces.h` 的 `FACE_ID_*` |
 
 麦克风 PCM 只经 USB 送到这台电脑，ESP32 不连接 Wi-Fi。
-# 显示主题更新（固件 1.10）
+# 显示主题更新（固件 1.11）
 
 保留原角色，新增本地球球渲染。Bridge 顶栏屏幕图标切换主题，选择存入电脑数据库，USB 重连时重新应用。协议新增 `THEME=14`，一个字节：0 原角色、1 球球；设备 STATUS 的 `display_theme` 回报实际主题。
 
-球球连续绘制目标 30 Hz，初版实机约 30.3 Hz；帧间不清空。1.10 使用表情局部更新，录音时也持续动画：睁大眼睛听、抬眼思考并显示小点、随实际 PCM 音量开合嘴巴。位置、形状和透明度以约 270 ms 的平滑响应切换，中途切换从当前姿态继续。音频接收在完整协议帧之间让出执行时间，避免连续播放饿死动画。`scripts/build_qiuqiu.py` 生成纹理，`src/qiuqiu_motion.h` 计算连续动作，原角色资源不变。球球视觉形象仅限非商业用途，见 [LICENSE 与来源](assets/qiuqiu/README.md)。
+球球 1.11 目标 60 Hz，帧间不清空。所有绘制由核心 0 的独立任务负责，音频与 USB 在 Arduino 核心继续运行；纹理预旋转缓存，逐帧复制连续行并只绘制可见表情。录音时持续动画：睁大眼睛听、抬眼思考并显示小点、随实际 PCM 音量开合嘴巴。动作节奏较 1.10 加快 25%，位置、形状和透明度以约 195 ms 的平滑响应切换，中途切换从当前姿态继续。任务创建失败时回退到单任务绘制，状态切换仍有效。
+
+`scripts/build_qiuqiu.py` 生成纹理，`src/qiuqiu_motion.h` 计算连续动作，`scripts/render_qiuqiu_preview.py` 生成 [当前表情预览](assets/qiuqiu/expressions-preview.png)。原角色资源不变。球球视觉形象仅限非商业用途，见 [LICENSE 与来源](assets/qiuqiu/README.md)。

@@ -2,6 +2,15 @@
 
 Last updated: 2026-10-18
 
+## Faster Qiuqiu rendering and expression gallery (2026-10-18)
+
+- Firmware `voice-device-1.11` moves all SPI drawing to one FreeRTOS task on core 0; the Arduino core continues USB, microphone and I2S output. Atomic pending commands and status fields prevent cross-core mutation of the pixel buffer. If task creation fails, the original single-core service remains available.
+- Qiuqiu targets 60 Hz with a microsecond clock. A rotated RGB565 base texture is cached once in PSRAM (73,728 bytes); per-frame texture restoration uses contiguous row copies. Tighter capsule bounds, one rotation normalization per eye and skipped invisible features reduce composition work. Full theme entry and steady-state opaque region transfers preserve the background without clearing between poses.
+- Motion timing is 1.25x faster, attentive eyes have a small visible gaze movement, and shape transitions reach ~95% in 195 ms. The original character, SPI clock, speech voices and volume settings are retained.
+- Previous firmware measured ~30 fps during real speech; this was not evidence of a speech-specific frame collapse. This revision raises update cadence; the user still needs to judge residual flicker on the physical panel.
+- Hardware verification: idle, recording-expression preview, thinking, approval, error and sleep measured **60 fps**; real audio playback measured **59.84–60.17 fps**, with **301/301 acknowledgements**, CRC 0 and no disconnect. Genuine button-recording throughput and visible flicker remain physical checks. Theme-switch and pause/resume are checked separately through Bridge.
+- `scripts/render_qiuqiu_preview.py` generates the current expression gallery: idle, recording, thinking, speaking, sleep, approval (shares thinking), and error. It is a schematic of implemented poses, not the upstream project's full expression set.
+
 ## Qiuqiu state expressions (2026-10-18)
 
 - Firmware `voice-device-1.10`: recording uses wide symmetric attentive eyes; thinking uses an upward gaze, asymmetric squint and three animated dots; speaking uses softened eyes and an opening mouth driven by the outgoing PCM energy. Silent audio and playback completion close the mouth. The original character is retained unchanged.

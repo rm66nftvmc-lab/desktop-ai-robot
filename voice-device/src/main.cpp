@@ -10,6 +10,7 @@
 #include "qiuqiu_assets.h"
 #include "qiuqiu_motion.h"
 #include <math.h>
+#include <atomic>
 
 // USB CDC: A5 5A | type | seq LE | length LE | payload | CRC16-CCITT LE.
 static constexpr uint8_t FRAME_STATUS=1, FRAME_DISPLAY=2, FRAME_AUDIO_UP=3, FRAME_AUDIO_DOWN=4;
@@ -17,7 +18,9 @@ static constexpr uint8_t FRAME_HEARTBEAT=5, FRAME_BUTTON=6, FRAME_ACK=8;
 static constexpr uint8_t FRAME_HELLO=9, FRAME_WELCOME=10, FRAME_AUDIO_END=11, FRAME_FACE=12;
 static constexpr uint8_t FRAME_ANIMATION=13;
 static constexpr uint8_t FRAME_THEME=14;
-static uint8_t displayTheme=0;
+static std::atomic<uint8_t> displayTheme{0};
+static std::atomic<int> pendingTheme{-1},pendingFace{-1},pendingColor{-1};
+static bool screenTaskRunning=false;
 static constexpr uint16_t MAX_PAYLOAD=1024;
 static constexpr int KEY_PIN=1, SAMPLE_RATE=16000;
 static constexpr int LCD_CS=8, LCD_DC=9, LCD_RST=10, LCD_MOSI=11, LCD_SCLK=12;
@@ -25,24 +28,25 @@ static constexpr int LCD_WIDTH=240, LCD_HEIGHT=320;
 static_assert(LCD_WIDTH==SCREEN_BG_WIDTH && LCD_HEIGHT==SCREEN_BG_HEIGHT,
               "LCD and generated background dimensions must match");
 static SPISettings lcdSpi(40000000, MSBFIRST, SPI_MODE0);
-static bool micReady=false, speakerReady=false, connected=false, listening=false, playing=false;
+static bool micReady=false,speakerReady=false;
+static std::atomic<bool> connected{false},listening{false},playing{false};
 static uint16_t txSequence=0;
 static uint32_t lastHost=0, lastHello=0, lastStatus=0;
 static uint32_t receivedAudio=0, sentAcks=0, badCrc=0;
 static uint8_t rxBuffer[9+MAX_PAYLOAD];
 static size_t rxLength=0;
 static uint8_t lcdRowBytes[LCD_WIDTH*2];
-static uint8_t currentFaceFrame=0;
-static bool animationEnabled=true;
+static std::atomic<uint8_t> currentFaceFrame{0};
+static std::atomic<bool> animationEnabled{true};
 static uint8_t *lcdFrameBytes=nullptr;
 // The decoder's Huffman tables exceed Arduino's default 8 KB loop stack.
 static tinfl_decompressor lcdInflater;
 static uint8_t *lcdFrameCache[FACE_COUNT][SCREEN_ANIMATION_FRAME_COUNT]={};
 static uint16_t lcdCachedFrames=0;
-static uint32_t lcdComposeUs=0,lcdPushUs=0;
+static std::atomic<uint32_t> lcdComposeUs{0},lcdPushUs{0};
 static ScreenDirtyRect lcdCachedRect={0,0,0,0};
 static size_t lcdCachedLength=0;
-static uint32_t lcdPresents=0,lcdSourceUpdates=0;
+static std::atomic<uint32_t> lcdPresents{0},lcdSourceUpdates{0};
 static uint8_t currentFaceRepeat=0;
 static uint32_t lastFaceFrameAt=0;
 static constexpr uint32_t FACE_FRAME_INTERVAL_MS=45;
@@ -126,7 +130,7 @@ static void lcdFill(uint16_t color) {
 
 // The pet's expressions live in flash as run-length encoded RGB565
 // (see scripts/build_faces.py), so they survive a power cut and need no network.
-static int currentFace=-1;
+static std::atomic<int> currentFace{-1};
 
 static void lcdDrawBackground() {
   lcdSetWindow(0,0,LCD_WIDTH-1,LCD_HEIGHT-1);
@@ -159,11 +163,12 @@ static void lcdPresentCachedFrame() {
 // sphere; normal updates touch the eye/mouth area, including while recording.
 static qiuqiu::Motion qiuqiuMotion;
 static bool qiuqiuNeedsFull=true;
-static float speakerEnvelope=0;
-static uint32_t speakerEnvelopeAt=0;
+static std::atomic<float> speakerEnvelope{0};
+static uint8_t *qiuqiuBase=nullptr;
+static std::atomic<uint32_t> speakerEnvelopeAt{0};
 
 static qiuqiu::Mood qiuqiuMood() {
-  switch(currentFace) {
+  switch(currentFace.load()) {
     case FACE_ID_LISTEN:return qiuqiu::Mood::Listen;
     case FACE_ID_THINK:return qiuqiu::Mood::Think;
     case FACE_ID_SPEAK:return qiuqiu::Mood::Speak;
@@ -194,37 +199,43 @@ static void lcdDrawQiuqiu() {
   // Logical bounds cover every pose and its antialiased edge. Rebuild from
   // texture each time so no eye, mouth or dot trails survive a transition.
   const int lx0=full?0:40,lx1=full?191:153,ly0=full?0:42,ly1=full?191:146;
-  for (int y=ly0;y<=ly1;++y) for (int x=lx0;x<=lx1;++x) {
-    uint16_t color=pgm_read_word(&QIUQIU_TEXTURE[y*192+x]);
-    const int offset=((191-x)*192+y)*2;
-    lcdFrameBytes[offset]=color>>8; lcdFrameBytes[offset+1]=color;
+  const int x0=ly0,x1=ly1,y0=191-lx1,y1=191-lx0;
+  const int rowBytes=(x1-x0+1)*2;
+  if (qiuqiuBase) {
+    for (int y=y0;y<=y1;++y)
+      memcpy(lcdFrameBytes+(y*192+x0)*2,qiuqiuBase+(y*192+x0)*2,rowBytes);
+  } else {
+    for (int y=ly0;y<=ly1;++y) for (int x=lx0;x<=lx1;++x) {
+      uint16_t color=pgm_read_word(&QIUQIU_TEXTURE[y*192+x]);
+      const int offset=((191-x)*192+y)*2;
+      lcdFrameBytes[offset]=color>>8; lcdFrameBytes[offset+1]=color;
+    }
   }
-  float energy=(playing && now-speakerEnvelopeAt<180)?speakerEnvelope:0;
+  float energy=(playing && now-speakerEnvelopeAt<180)?speakerEnvelope.load():0;
   const auto &pose=qiuqiuMotion.step(qiuqiuMood(),now,energy);
   for (const auto &e:pose.eyes) {
-    for (int y=int(e.y-e.half-e.radius-10);y<=int(e.y+e.half+e.radius+10);++y)
-      for (int x=int(e.x-e.radius-12);x<=int(e.x+e.radius+12);++x) {
+    const float norm=1/sqrtf(1+e.tilt*e.tilt);
+    const float extentX=e.radius+fabsf(e.tilt)*e.half+2;
+    for (int y=int(e.y-e.half-e.radius-2);y<=int(e.y+e.half+e.radius+2);++y)
+      for (int x=int(e.x-extentX);x<=int(e.x+extentX);++x) {
         float dx=x-e.x,dy=y-e.y;
         // Normalize rotation so eye thickness doesn't change with tilt.
-        float norm=1/sqrtf(1+e.tilt*e.tilt);
         float u=(dx-e.tilt*dy)*norm,v=(dy+e.tilt*dx)*norm;
         float q=fmaxf(0.f,fabsf(v)-e.half);
         qiuqiuInk(x,y,e.radius+.5f-sqrtf(u*u+q*q));
       }
   }
-  for(int i=0;i<3;++i) for(int y=47;y<=55;++y) for(int x=84+i*12;x<=92+i*12;++x) {
+  for(int i=0;i<3;++i) if (pose.dots[i]>.002f) for(int y=47;y<=55;++y) for(int x=84+i*12;x<=92+i*12;++x) {
     float dx=x-(88+i*12),dy=y-51;
     qiuqiuInk(x,y,fminf(1.f,fmaxf(0.f,3.4f-sqrtf(dx*dx+dy*dy)))*pose.dots[i]);
   }
   // Speech energy comes from PCM sent to I2S; silent gaps close the mouth.
   float ry=1+pose.mouth*8;
-  for(int y=118;y<=138;++y) for(int x=83;x<=109;++x) {
+  if (pose.mouth>.002f) for(int y=118;y<=138;++y) for(int x=83;x<=109;++x) {
     float dx=(x-96)/10.f,dy=(y-128)/ry;
     qiuqiuInk(x,y,fminf(1.f,fmaxf(0.f,(1-sqrtf(dx*dx+dy*dy))*ry))*fminf(1.f,pose.mouth*5));
   }
-  // Rotate bounds in the same orientation as the retained original theme.
-  const int x0=ly0,x1=ly1,y0=191-lx1,y1=191-lx0;
-  const int rowBytes=(x1-x0+1)*2;
+  // Pack the completed rectangle, preserving the old theme's orientation.
   for(int y=y0;y<=y1;++y)
     memmove(lcdFrameBytes+(y-y0)*rowBytes,lcdFrameBytes+(y*192+x0)*2,rowBytes);
   lcdComposeUs=micros()-started;
@@ -305,7 +316,7 @@ static uint8_t lcdDrawFaceFrame(int index,uint8_t frameIndex,bool partial=false)
   return face.count;
 }
 
-static void lcdDrawFace(int index) {
+static void lcdApplyFace(int index) {
   if (index<0 || index>=FACE_COUNT || index==currentFace) return;
   currentFace=index;
   currentFaceFrame=0;
@@ -319,8 +330,11 @@ static void lcdTickAnimation() {
   const uint32_t elapsed=millis()-lastFaceFrameAt;
   if (displayTheme==1) {
     // Dirty-region updates keep recording animated without full-screen SPI stalls.
-    if (!animationEnabled || elapsed<33) return;
-    lastFaceFrameAt+=elapsed/33*33;
+    static uint32_t lastQiuqiuUs=0;
+    const uint32_t now=micros(),passed=now-lastQiuqiuUs;
+    if (!animationEnabled) {lastQiuqiuUs=now;return;}
+    if (passed<16667) return;
+    lastQiuqiuUs+=passed/16667*16667;
     lcdDrawQiuqiu();
     return;
   }
@@ -339,10 +353,34 @@ static void lcdTickAnimation() {
     currentFaceFrame=(currentFaceFrame+advances)%face.count;
     // Dirty bounds describe adjacent frames only. A late/skipped pose must
     // repaint the full region to avoid leaving pixels from an older pose.
-    lcdDrawFaceFrame(currentFace,currentFaceFrame,advances==1);
+    lcdDrawFaceFrame(currentFace.load(),currentFaceFrame.load(),advances==1);
   } else {
     lcdPresentCachedFrame();
   }
+}
+
+static void lcdDrawFace(int index) {
+  if(index>=0 && index<FACE_COUNT) pendingFace.store(index);
+}
+
+// SPI, pixel composition, and both themes have exactly one owner. Audio I2S
+// writes on the Arduino core cannot block this task's display cadence.
+static void lcdService() {
+  int theme=pendingTheme.exchange(-1);
+  if(theme>=0 && theme!=displayTheme.load()) {
+    displayTheme=theme; qiuqiuNeedsFull=true;
+    if(theme==1) lcdFill(0x0843); else lcdDrawBackground();
+    int face=currentFace.load(); currentFace=-1; lcdApplyFace(face);
+  }
+  int face=pendingFace.exchange(-1);
+  if(face>=0) lcdApplyFace(face);
+  int color=pendingColor.exchange(-1);
+  if(color>=0) {lcdFill(color);qiuqiuNeedsFull=true;}
+  lcdTickAnimation();
+}
+
+static void lcdTask(void *) {
+  for(;;) {lcdService();vTaskDelay(1);}
 }
 
 static void lcdInit() {
@@ -351,6 +389,12 @@ static void lcdInit() {
   if (!lcdFrameBytes)
     lcdFrameBytes=static_cast<uint8_t *>(heap_caps_malloc(frameBytes,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
   lcdWarmFrameCache();
+  qiuqiuBase=static_cast<uint8_t *>(heap_caps_malloc(192*192*2,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
+  if(qiuqiuBase) for(int y=0;y<192;++y) for(int x=0;x<192;++x) {
+    uint16_t c=pgm_read_word(&QIUQIU_TEXTURE[y*192+x]);
+    int offset=((191-x)*192+y)*2;
+    qiuqiuBase[offset]=c>>8;qiuqiuBase[offset+1]=c;
+  }
   pinMode(LCD_CS,OUTPUT); pinMode(LCD_DC,OUTPUT); pinMode(LCD_RST,OUTPUT);
   digitalWrite(LCD_CS,HIGH); digitalWrite(LCD_DC,HIGH); digitalWrite(LCD_RST,HIGH);
   SPI.begin(LCD_SCLK,-1,LCD_MOSI,LCD_CS);
@@ -409,19 +453,13 @@ static void handleFrame(uint8_t kind,const uint8_t *payload,uint16_t length) {
   } else if (kind==FRAME_FACE && connected && length==1) {
     lcdDrawFace(listening?FACE_ID_LISTEN:payload[0]);
   } else if (kind==FRAME_THEME && connected && length==1 && payload[0]<=1) {
-    if (displayTheme!=payload[0]) {
-      displayTheme=payload[0];
-      qiuqiuNeedsFull=true;
-      if (displayTheme==1) lcdFill(0x0843); else lcdDrawBackground();
-      int face=currentFace; currentFace=-1; lcdDrawFace(face);
-    }
+    pendingTheme.store(payload[0]);
   } else if (kind==FRAME_ANIMATION && connected && length==1) {
     animationEnabled=payload[0]!=0;
-    lastFaceFrameAt=millis();
   } else if (kind==FRAME_HEARTBEAT && connected) {
     lastHost=millis();
   } else if (kind==FRAME_DISPLAY && connected && length==2) {
-    lcdFill(payload[0]|(static_cast<uint16_t>(payload[1])<<8));
+    pendingColor.store(payload[0]|(static_cast<uint16_t>(payload[1])<<8));
   } else if (kind==FRAME_AUDIO_DOWN && connected && speakerReady && !listening && length && length<=1024 && length%2==0) {
     ++receivedAudio;
     if (!playing) { playing=true; lcdDrawFace(FACE_ID_SPEAK); }
@@ -523,7 +561,8 @@ void setup() {
   speakerReady=startSpeaker();
   lcdInit();
   currentFace=-1;
-  lcdDrawFace(micReady&&speakerReady?FACE_ID_BOOT:FACE_ID_ERROR);
+  lcdApplyFace(micReady&&speakerReady?FACE_ID_BOOT:FACE_ID_ERROR);
+  screenTaskRunning=xTaskCreatePinnedToCore(lcdTask,"screen",6144,nullptr,1,nullptr,0)==pdPASS;
 }
 
 void loop() {
@@ -534,20 +573,20 @@ void loop() {
   pollButton();
   if (!connected && millis()-lastHello>=2000) {
     lastHello=millis();
-      sendJson(FRAME_HELLO,"{\"protocol\":1,\"firmware\":\"voice-device-1.10\"}");
+      sendJson(FRAME_HELLO,"{\"protocol\":1,\"firmware\":\"voice-device-1.11\"}");
   }
   if (connected && millis()-lastStatus>=3000) {
     lastStatus=millis();
     char status[512];
     snprintf(status,sizeof(status),"{\"listening\":%s,\"playing\":%s,\"speaker_ready\":%s,\"face\":%d,\"frame\":%u,\"uptime_ms\":%lu,\"audio_rx\":%lu,\"audio_ack\":%lu,\"bad_crc\":%lu,\"reset_reason\":%d,\"screen_buffer\":%s,\"compose_us\":%lu,\"push_us\":%lu,\"animation_enabled\":%s,\"presents\":%lu,\"source_updates\":%lu,\"cached_frames\":%u,\"display_theme\":%u}",
-      listening?"true":"false",playing?"true":"false",speakerReady?"true":"false",currentFace,currentFaceFrame,
+      listening?"true":"false",playing?"true":"false",speakerReady?"true":"false",currentFace.load(),currentFaceFrame.load(),
       static_cast<unsigned long>(millis()),static_cast<unsigned long>(receivedAudio),
       static_cast<unsigned long>(sentAcks),static_cast<unsigned long>(badCrc),
       static_cast<int>(esp_reset_reason()),lcdFrameBytes?"true":"false",
       static_cast<unsigned long>(lcdComposeUs),static_cast<unsigned long>(lcdPushUs),animationEnabled?"true":"false",
-      static_cast<unsigned long>(lcdPresents),static_cast<unsigned long>(lcdSourceUpdates),lcdCachedFrames,displayTheme);
+      static_cast<unsigned long>(lcdPresents),static_cast<unsigned long>(lcdSourceUpdates),lcdCachedFrames,displayTheme.load());
     sendJson(FRAME_STATUS,status);
   }
   pollMicrophone();
-  lcdTickAnimation();
+  if(!screenTaskRunning) lcdService();
 }
