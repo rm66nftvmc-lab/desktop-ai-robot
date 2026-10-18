@@ -182,3 +182,24 @@ def test_voice_cancel_suppresses_late_reply_but_does_not_cancel_other_agent(tmp_
     voice.on_reply(7,'Late answer')
     assert voice._message_id is None
     assert voice._jobs.empty()
+
+
+def test_session_metadata_is_saved_before_completed_reply_becomes_visible(tmp_path, monkeypatch):
+    from bridge.app.storage import get_setting
+    db=tmp_path/'messages.sqlite3'; initialize(db)
+    mid=add_message(db,'hermes','hello',delivery='queued')['id']
+    worker=HermesWorker(db,hermes_home=tmp_path,api_client=object())
+    observed=[]; done=threading.Event()
+    def ask(*args):
+        worker._last_run_session='settled-session'
+        return 'answer'
+    def publish(*args,**kwargs):
+        observed.append(get_setting(db,'hermes_session_id'))
+        result=add_message(*args,**kwargs); done.set(); return result
+    worker._ask=ask
+    monkeypatch.setattr('bridge.app.hermes.add_message',publish)
+    worker.enqueue(mid,'hello'); worker.start()
+    try:
+        assert done.wait(2)
+        assert observed==['settled-session']
+    finally: worker.stop()

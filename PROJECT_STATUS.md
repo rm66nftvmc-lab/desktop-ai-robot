@@ -9,7 +9,7 @@ Last updated: 2026-10-18
 - Character reference: [sam70361/aora-bot](https://github.com/sam70361/aora-bot). This is a lightweight hardware adaptation, not the entire browser emotion engine. Ball visuals are **non-commercial only**; original LICENSE and NOTICE are retained under `voice-device/assets/qiuqiu/`.
 - Hermes official SSE and Harness authenticated session-follow WebSocket deliver public text incrementally. Reasoning and tool arguments are excluded. Web polling is scoped to the selected agent/conversation and ignores late results after switching. Final native history replaces live text.
 - “停止回答” cancels the selected queued/running request. Harness queued requests are removed from its inbox; active requests wait for their own turn-end. A remote acknowledgement alone is not treated as a confirmed stop. Failed confirmation stays visible. Accepted cancellation suppresses late automatic speech; it cannot undo already executed tool actions.
-- Verification: **130 Python tests and 10 Node interaction tests passed**; firmware built and uploaded successfully. Live disposable-session tests passed for **both agents**: multiple partial updates before completion, stop during output, confirmed interruption, and permanent removal of test conversations. Browser visual and physical appearance checks remain user observations.
+- Verification: **131 Python tests and 10 Node interaction tests passed**; firmware built and uploaded successfully. Live disposable-session tests passed for **both agents**: multiple partial updates before completion, stop during output, confirmed interruption, and permanent removal of test conversations. Browser visual and physical appearance checks remain user observations.
 
 
 ## Message playback toggle (2026-10-18)

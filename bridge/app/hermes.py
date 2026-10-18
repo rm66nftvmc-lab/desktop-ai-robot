@@ -427,11 +427,11 @@ class HermesWorker:
                         continue
                     # Serialize final settlement with cancel, so a successful stop
                     # cannot race between the cancellation check and publication.
-                    add_message(self.database, self.source, answer, role="assistant",
-                                delivery="completed", reply_to=message_id, conversation_id=conversation)
                     bind_draft(self.database, conversation, self._last_run_session)
                     if self._last_run_session:
                         set_setting(self.database, self.session_setting, self._last_run_session)
+                    add_message(self.database, self.source, answer, role="assistant",
+                                delivery="completed", reply_to=message_id, conversation_id=conversation)
                     set_delivery(self.database, message_id, "completed")
                     self._task_locked(message_id, state='completed', text=answer, error=None)
                 with self._lock:
