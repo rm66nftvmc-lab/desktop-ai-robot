@@ -136,9 +136,11 @@ class DeviceLink:
             audio.writeframes(pcm)
         return output.getvalue()
 
-    def stop_playback(self) -> int | None:
+    def stop_playback(self, *, expected_generation: int | None = None) -> int | None:
         """Invalidate earlier speech requests and stop the current stream."""
         with self._lock:
+            if expected_generation is not None and expected_generation != self._playback_generation:
+                return None
             if not self._state["connected"] or self._state["listening"]:
                 return None
             self._playback_generation += 1

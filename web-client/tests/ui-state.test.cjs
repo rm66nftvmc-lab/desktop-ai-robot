@@ -2,6 +2,71 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const ui = require('../ui-state.js');
 
+function playerHarness(request) {
+  const fs = require('node:fs'), vm = require('node:vm');
+  const source = fs.readFileSync(require.resolve('../app.js'), 'utf8');
+  const implementation = source.slice(source.indexOf('function renderSpeechButtons('), source.indexOf('async function request('));
+  const buttons = [];
+  const status = { textContent: '' };
+  const context = vm.createContext({
+    activePlayback: null, playbackRequestId: 0, audioOutput: { enabled: true },
+    crypto: require('node:crypto'), request, $: () => status,
+    document: { querySelectorAll: () => buttons },
+  });
+  vm.runInContext(implementation, context);
+  function button(key) {
+    const classes = new Set(['message-play-button']);
+    const value = { dataset: { playbackKey: key, playLabel: '播放回复' }, disabled: false,
+      setAttribute(name, text) { this[name] = text; },
+      classList: { contains: (name) => classes.has(name), toggle(name, on) { if (on) classes.add(name); else classes.delete(name); } },
+    };
+    buttons.push(value);
+    return value;
+  }
+  return { context, buttons, button, status };
+}
+
+test('same message toggles stop while synthesis is pending and ignores late response', async () => {
+  let finish;
+  const calls = [];
+  const h = playerHarness((path, options) => {
+    calls.push({ path, body: JSON.parse(options.body) });
+    return path.endsWith('/speak') ? new Promise((resolve) => { finish = resolve; }) : Promise.resolve({ stopped: true });
+  });
+  const button = h.button('message-a'), error = { textContent: '' };
+  const pending = h.context.playSpeech('hello', button, error);
+  assert.equal(button.disabled, false);
+  assert.equal(button['aria-label'], '停止播放');
+  assert.match(button.innerHTML, /rect/);
+  await h.context.playSpeech('hello', button, error);
+  assert.equal(h.context.activePlayback, null);
+  assert.equal(calls[0].body.playback_id, calls[1].body.playback_id);
+  finish({ queued: false, superseded: true });
+  await pending;
+  assert.equal(button['aria-label'], '播放回复');
+  assert.equal(h.status.textContent, '已停止播放。');
+});
+
+test('switching messages and rerendering keep only the new message in stop state', async () => {
+  const synthesis = [];
+  const h = playerHarness((path) => path.endsWith('/speak') ?
+    new Promise((resolve) => synthesis.push(resolve)) : Promise.resolve({ stopped: true }));
+  const first = h.button('message-a'), second = h.button('message-b'), error = {};
+  const old = h.context.playSpeech('old', first, error);
+  const latest = h.context.playSpeech('new', second, error);
+  await new Promise(setImmediate);
+  synthesis[0]({ queued: false, superseded: true });
+  synthesis[1]({ queued: true });
+  await Promise.all([old, latest]);
+  assert.equal(first['aria-label'], '播放回复');
+  assert.equal(second['aria-label'], '停止播放');
+  h.buttons.length = 0;
+  const replacement = h.button('message-b');
+  h.context.renderSpeechButtons();
+  assert.equal(replacement['aria-label'], '停止播放');
+  assert.equal(replacement.disabled, false);
+});
+
 test('partial deletion retains failed and unconfirmed selections', () => {
   const items = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
   const result = ui.deletionOutcome(items, {

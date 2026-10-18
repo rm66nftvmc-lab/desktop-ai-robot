@@ -2,6 +2,12 @@
 
 Last updated: 2026-10-18
 
+## Message playback toggle (2026-10-18)
+
+- Assistant-message speech actions now use a compact play icon that becomes a stop icon immediately, including while speech is being generated. Clicking again stops the same request; switching messages moves the active state to the new message. Touch hit areas are larger than the visible icon.
+- Added authenticated same-origin `POST /api/tts/stop` and optional `playback_id` on `/api/tts/speak`. Retired IDs prevent cancelled requests from starting late. Generation-aware stops cannot stop a newer recording or playback. Polling and message rerenders preserve the active icon until audio drains or is interrupted.
+- Verification: **121 Python tests and 8 Node tests passed**, including concurrent stop during synthesis, cancellation before arrival, delayed stops, rapid message switching and message rerendering. Physical listening/visual confirmation is still a user check.
+
 ## Bridge maintenance release 0.2.0 (2026-10-18)
 
 - Database startup now runs a time-bounded, read-only integrity check. Corrupt databases and schemas from a newer Bridge are refused without replacement or downgrade. A temporarily busy check is reported as deferred. Schema version 1 preserves existing messages.

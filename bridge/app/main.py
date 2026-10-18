@@ -30,6 +30,7 @@ from .tts import (SynthesisCancelled, set_selected_voice, synthesize_chunks,
 from .voice import VoiceConversation
 from .runtime import RuntimeStatus
 from .maintenance import BRIDGE_VERSION, MaintenanceStatus, check_database
+from .playback import PlaybackControl
 
 SOURCES = ("hermes", "deepseek_harness", "doubao_web")
 WEB_DIR = Path(__file__).resolve().parents[2] / "web-client"
@@ -64,6 +65,11 @@ class VoiceTargetBody(BaseModel):
 
 class SpeakBody(BaseModel):
     text: str = Field(min_length=1, max_length=300)
+    playback_id: str | None = Field(default=None, min_length=1, max_length=96)
+
+
+class StopSpeechBody(BaseModel):
+    playback_id: str | None = Field(default=None, min_length=1, max_length=96)
 
 
 class VoiceBody(BaseModel):
@@ -118,6 +124,7 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
     speech.on_transcript = voice.on_transcript
     speech.on_error = voice.on_speech_error
     runtime = RuntimeStatus()
+    playback = PlaybackControl(device)
     hermes.on_reply = voice.on_reply
     hermes.on_error = voice.on_hermes_error
     hermes.on_approval = voice.on_approval
@@ -223,6 +230,7 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
         result = {
             "bridge": "ready",
             "maintenance": maintenance.snapshot(),
+            "playback": playback.snapshot(),
             "device": device.snapshot(),
             "speech": speech.snapshot(),
             "voice": voice.snapshot(),
@@ -288,6 +296,11 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
     def transcripts() -> dict:
         return {"items": speech.transcripts()}
 
+    @app.post("/api/tts/stop", dependencies=[Depends(require_session)])
+    def stop_speech(body: StopSpeechBody, request: Request) -> dict:
+        check_origin(request)
+        return {"stopped": playback.stop(body.playback_id)}
+
     @app.post("/api/tts/speak", dependencies=[Depends(require_session)])
     def speak(body: SpeakBody, request: Request) -> dict:
         check_origin(request)
@@ -298,7 +311,9 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
             return {"queued": False, "muted": True}
         if not device.snapshot()["connected"]:
             raise HTTPException(status_code=503, detail="Voice device disconnected")
-        generation = device.stop_playback()
+        identity, generation, cancelled = playback.claim(body.playback_id)
+        if cancelled:
+            return {"queued": False, "superseded": True}
         if generation is None:
             raise HTTPException(status_code=409, detail="Voice device busy")
         try:
@@ -318,6 +333,7 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         finally:
             device.finish_playback(generation)
+            playback.finished(identity)
         if not device.is_current_generation(generation):
             return {"queued": False, "superseded": True}
         return {"queued": started}

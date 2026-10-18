@@ -265,3 +265,16 @@ p { margin: 0; }
   .composer-dock .playback-status:empty, .composer-dock .form-error:empty { display: none; }
   .task-status { font-size: .72rem; margin-bottom: 5px; }
 }
+
+.message-actions .message-play-button {
+  display: inline-grid; place-items: center; width: 30px; height: 30px;
+  padding: 6px; border: 1px solid transparent; border-radius: 8px;
+  color: #9cbfe0; background: transparent;
+}
+.message-actions .message-play-button svg { width: 16px; height: 16px; fill: currentColor; }
+.message-actions .message-play-button:hover { color: #d9ecff; background: #1c3042; text-decoration: none; }
+.message-actions .message-play-button.is-playing { color: #a9d4ff; background: #20384e; border-color: #365874; }
+.message-actions .message-play-button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+@media (pointer: coarse) {
+  .message-actions .message-play-button { width: 40px; height: 40px; }
+}

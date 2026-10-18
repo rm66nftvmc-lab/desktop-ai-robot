@@ -12,6 +12,7 @@ const targets = {
 let lastMessageVersion = "";
 let messagesLoading = false;
 let playbackRequestId = 0;
+let activePlayback = null;
 let pendingApproval = null;
 let audioOutput = { volume: 100, muted: false, enabled: true };
 let audioSave = Promise.resolve();
@@ -373,6 +374,10 @@ function saveAudioOutput(change) {
     enabled: !(change.muted ?? audioOutput.muted) && (change.volume ?? audioOutput.volume) > 0 });
   if (!audioOutput.enabled) {
     playbackRequestId++;
+    const previous = activePlayback;
+    activePlayback = null;
+    renderSpeechButtons();
+    if (previous) request("/api/tts/stop", { method: "POST", body: JSON.stringify({ playback_id: previous.id }) }).catch(() => {});
     $("#playback-status").textContent = "已静音，回复仅显示文字。";
   }
   audioSave = audioSave.then(async () => {
@@ -421,32 +426,83 @@ async function resolveApproval(choice) {
   }
 }
 
+function renderSpeechButtons() {
+  for (const button of document.querySelectorAll("[data-playback-key]")) {
+    const active = activePlayback?.key === button.dataset.playbackKey;
+    const stopping = active && activePlayback.stopping;
+    const label = active ? (stopping ? "正在停止" : "停止播放") : button.dataset.playLabel;
+    button.disabled = Boolean(stopping);
+    button.title = label;
+    button.setAttribute("aria-label", label);
+    button.setAttribute("aria-pressed", String(Boolean(active)));
+    button.classList.toggle("is-playing", Boolean(active));
+    if (button.classList.contains("message-play-button")) {
+      button.innerHTML = active ?
+        '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>' :
+        '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l11-6.5Z"/></svg>';
+    } else button.textContent = active ? label : "播放测试语音";
+  }
+}
+
 async function playSpeech(text, button, errorBox) {
   if (button.disabled) return;
+  const key = button.dataset.playbackKey || "voice-test";
+  button.dataset.playbackKey = key;
+  button.dataset.playLabel ||= "播放测试语音";
+  const previous = activePlayback;
+  const stopping = previous?.key === key;
+  const requestId = ++playbackRequestId;
+  const current = stopping ? { ...previous, stopping: true } :
+    { key, id: crypto.randomUUID(), posting: true, stopping: false };
+  activePlayback = current;
+  renderSpeechButtons();
+  errorBox.textContent = "";
+  if (stopping) {
+    try {
+      await request("/api/tts/stop", { method: "POST", body: JSON.stringify({ playback_id: previous.id }) });
+      if (requestId === playbackRequestId) {
+        activePlayback = null;
+        $("#playback-status").textContent = "已停止播放。";
+      }
+    } catch (error) {
+      if (requestId === playbackRequestId) {
+        activePlayback = { ...previous, stopping: false, posting: false };
+        errorBox.textContent = `停止失败：${error.message}`;
+      }
+    } finally { renderSpeechButtons(); }
+    return;
+  }
   if (!audioOutput.enabled) {
+    activePlayback = null;
+    renderSpeechButtons();
     $("#playback-status").textContent = "已静音，回复仅显示文字。请恢复语音或提高音量后重试。";
     return;
   }
-  const original = button.textContent;
-  const requestId = ++playbackRequestId;
-  button.disabled = true;
-  button.textContent = "正在播放…";
-  errorBox.textContent = "";
   $("#playback-status").textContent = "正在本机生成并播放语音…";
   try {
+    // Retire the previous ID before posting its replacement, including requests
+    // still waiting to reach the server. Delayed stops cannot stop the new ID.
+    if (previous) await request("/api/tts/stop", { method: "POST", body: JSON.stringify({ playback_id: previous.id }) });
+    if (requestId !== playbackRequestId) return;
     const result = await request("/api/tts/speak", {
-      method: "POST", timeout: 180000, body: JSON.stringify({ text }),
+      method: "POST", timeout: 180000, body: JSON.stringify({ text, playback_id: current.id }),
     });
     if (requestId === playbackRequestId) {
+      current.posting = false;
+      if (result.muted || result.superseded || !result.queued) activePlayback = null;
       $("#playback-status").textContent = result.muted ? "已静音，回复仅显示文字。" : result.superseded ?
         "这次朗读已被更新的请求取代。" : "已发送到机器人，正在播放。";
     }
-    button.textContent = result.superseded ? "已切换" : "播放中";
   } catch (error) {
-    errorBox.textContent = error.message;
-    if (requestId === playbackRequestId) $("#playback-status").textContent = `朗读失败：${error.message}`;
+    if (requestId === playbackRequestId) {
+      current.posting = false;
+      // A timeout does not prove playback stopped. Keep the stop button until
+      // the next status poll confirms idle, so the user can still cancel it.
+      errorBox.textContent = error.message;
+      $("#playback-status").textContent = `朗读状态未确认：${error.message}`;
+    }
   } finally {
-    setTimeout(() => { button.disabled = false; button.textContent = original; }, 1800);
+    renderSpeechButtons();
   }
 }
 
@@ -548,10 +604,18 @@ function updateDevice(link) {
 async function refreshStatus() {
   if (statusLoading) return false;
   statusLoading = true;
+  const playbackAtStart = activePlayback ? { id: activePlayback.id, posting: activePlayback.posting } : null;
   try {
     const status = await request("/api/status");
     showWorkspace();
     updateDevice(status.device);
+    if (activePlayback && !activePlayback.stopping && !activePlayback.posting && playbackAtStart &&
+        !playbackAtStart.posting && playbackAtStart.id === activePlayback.id &&
+        status.playback?.playback_id !== activePlayback.id) {
+      activePlayback = null;
+      $("#playback-status").textContent = "播放已结束。";
+      renderSpeechButtons();
+    }
     const task = status.task || { label: "准备就绪", state: "idle" };
     $("#task-status").textContent = task.detail ? `${task.label} · ${task.detail}` : task.label;
     $("#task-status").dataset.state = task.state;
@@ -642,7 +706,10 @@ function messageNode(item, voiceReplyIds) {
     actions.className = "message-actions";
     const speak = document.createElement("button");
     speak.type = "button";
-    speak.textContent = item.text.length > 300 ? "朗读前 300 字" : "让机器人朗读";
+    speak.className = "message-play-button";
+    speak.dataset.playbackKey = `${item.source}:${selectedSessions[item.source] || ""}:${item.id}`;
+    speak.dataset.playLabel = item.text.length > 300 ? "播放回复（前 300 字）" : "播放回复";
+    speak.setAttribute("aria-label", speak.dataset.playLabel);
     speak.addEventListener("click", async () => {
       await playSpeech(item.text.slice(0, 300), speak, $("#send-error"));
     });
@@ -684,6 +751,7 @@ async function refreshMessages() {
       nodes.push(empty);
     }
     messages.replaceChildren(...nodes);
+    renderSpeechButtons();
     if (nearBottom || sourceChanged) messages.scrollTop = messages.scrollHeight;
   } catch (error) {
     if (error.status === 401) showLogin();
