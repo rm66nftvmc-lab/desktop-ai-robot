@@ -28,6 +28,7 @@ from .tts import (SynthesisCancelled, set_selected_voice, synthesize_chunks,
                   start_paimon_service, stop_paimon_service, voice_status,
                   warm_voice)
 from .voice import VoiceConversation
+from .runtime import RuntimeStatus
 
 SOURCES = ("hermes", "deepseek_harness", "doubao_web")
 WEB_DIR = Path(__file__).resolve().parents[2] / "web-client"
@@ -105,11 +106,13 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
     conversations = Conversations(database, hermes, harness)
     audio_output = AudioOutput(data_dir)
     device = DeviceLink(speech.enqueue, lambda generation: voice.on_listen_start(generation),
-                        audio_output=audio_output)
+                        audio_output=audio_output, on_disconnect=lambda: voice.on_device_disconnect())
     voice = VoiceConversation(database, data_dir, device, hermes, audio_output=audio_output,
                               workers={"hermes": hermes, "deepseek_harness": harness},
                               validate_target=conversations.resolve)
     speech.on_transcript = voice.on_transcript
+    speech.on_error = voice.on_speech_error
+    runtime = RuntimeStatus()
     hermes.on_reply = voice.on_reply
     hermes.on_error = voice.on_hermes_error
     hermes.on_approval = voice.on_approval
@@ -212,7 +215,7 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
 
     @app.get("/api/status", dependencies=[Depends(require_session)])
     def status() -> dict:
-        return {
+        result = {
             "bridge": "ready",
             "device": device.snapshot(),
             "speech": speech.snapshot(),
@@ -227,6 +230,13 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
             "delivery": {"hermes": "connected" if hermes.executable or hermes.api_client else "unavailable",
                          "doubao_web": "not_configured"},
         }
+        result["task"] = runtime.snapshot(result["device"], result["speech"], result["voice"],
+                                          [result["hermes"], result["deepseek_harness"]])
+        return result
+
+    @app.get("/api/diagnostics", dependencies=[Depends(require_session)])
+    def diagnostics() -> dict:
+        return runtime.diagnostics(status())
 
     @app.post("/api/voice/target", dependencies=[Depends(require_session)])
     def select_voice_target(body: VoiceTargetBody, request: Request) -> dict:

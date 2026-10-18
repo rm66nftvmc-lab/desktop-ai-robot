@@ -1,6 +1,17 @@
 # Desktop AI Robot project status
 
-Last updated: 2026-10-17
+Last updated: 2026-10-18
+
+## Latest update (2026-10-18)
+
+- Added shared task status: recording, local transcription, waiting for AI, approval, generating speech, playback, completion, failure, and interruption.
+- Short/empty recordings and model errors now terminate the task with an actionable message. USB disconnects discard old capture/playback buffers; reconnects cannot replay stale speech or resend messages. Missing device heartbeats and speaker acknowledgements fail visibly.
+- Harness recovers its expired authentication cookie once after an explicit 401 and can restart its owned host. Ambiguous failed writes are never automatically retried.
+- Bulk deletion processes five sessions at a time, displays progress, retains failed selections and errors across automatic conversation switching, and filters host catalog entries only after permanent purge is confirmed. Two fresh native Harness sessions were permanently deleted through the running Bridge and did not reappear in its catalog.
+- Mobile keyboard height follows the visual viewport. Sidebar gestures require a clear horizontal swipe, distinguish pointer IDs, and do not treat diagonal scrolling as a swipe. Keyboard focus stays inside the open sidebar. Approval polling no longer repeatedly steals focus.
+- Added authenticated content-free diagnostics (`/api/diagnostics`), web download, local `scripts/check_bridge.py`, and `start-robot.cmd` for one-click startup. Voice settings and firmware remain unchanged.
+- Automated verification: **108 Python tests + 6 Node interaction tests passed**. Live Bridge restart, ESP32 handshake, diagnostic export, and native Harness batch deletion passed. The in-app browser's saved access policy blocked opening the local page, so this update has no real mobile visual/keyboard verification and no new physical speech/button test.
+- Unpublished status documents contained the local access key. It has been removed from the publication snapshot and its unpublished commit ancestry is kept only in a local backup branch, not pushed.
 
 ## Purpose and layout
 
@@ -9,36 +20,55 @@ This project connects an ESP32-S3 voice device to a Windows Bridge service and a
 - `bridge/`: authenticated local API, device protocol, local storage, voice pipeline, and Hermes / DeepSeek Harness adapters.
 - `web-client/`: responsive chat UI, agent conversation lists, speaker controls, and mobile-friendly navigation.
 - `voice-device/`: ESP32-S3 PlatformIO firmware, screen assets, microphone, button, and speaker transport.
-- `scripts/`: asset generation, model setup, and development utilities.
+- `plugins/`: vendored DSH plugins needed by the Bridge's Harness host (currently `dsh-plugin-session-delete` 0.3.4, MIT).
+- `scripts/`: asset generation, model setup, offline plugin install, and the pinned-store Bridge launcher.
+- `docs/`: setup/recovery manual, wiring, protocol and verification notes.
 
 ## Working features
 
 - ESP32-S3 connects to Bridge over USB CDC, reports button and audio state, uploads microphone PCM, and receives acknowledged speaker audio and screen frames.
 - A button recording follows the currently selected AI and conversation. It transcribes locally, sends the result to that conversation, and queues the response for robot playback. Selecting mute keeps answers in chat without speech output.
 - The web UI supports Hermes and DeepSeek Harness conversations, switching, creation, single deletion, and selection-based bulk deletion. Doubao PPT is not an active conversation target.
-- Hermes uses the local Gateway integration and can continue a desktop session. DeepSeek Harness uses its local desktop web runtime and continues its current session.
-- Paimon is the selected Chinese voice; English passages use the Kokoro English voice. The user preferred this mixed-language arrangement after testing. Volume and mute settings are controlled in the UI.
-- The ST7789 display runs cached/interpolated face animation. The user confirmed the latest cache optimization looked smooth and normal.
+- Hermes uses the local Gateway integration. **Hermes 0.22.1 refuses API writes into desktop sessions** (409 `permission_denied`), so Bridge routes to an API-created session and creates one when needed; desktop sessions remain readable in the catalog. DeepSeek Harness uses its local desktop web runtime and continues its current session.
+- Paimon is the selected Chinese voice; English passages use the Kokoro English voice. Volume and mute settings are controlled in the UI.
+- The ST7789 display runs cached/interpolated face animation from 64 PSRAM-cached poses. The user confirmed the animation looked smooth and normal.
 - The Bridge can be reached from the dedicated Android phone through the user's private Tailscale network. Do not expose it with a public router port or Tailscale Funnel.
 
-## Latest verified state
+## Latest verified state (2026-10-17 evening)
 
-- Bridge and ESP32-S3 were connected during the latest hardware tests.
-- Hermes and DeepSeek Harness routing were exercised. The user confirmed a Hermes button-recording reply played through the robot speaker.
-- Harness permanent deletion is implemented through a locally installed `dsh-plugin-session-delete` v0.3.4 in the Bridge-specific `.dsh/profiles/web` profile. The plugin is an external local dependency and is not included in this repository. The API path and failure recovery have been tested; a real user session was not deleted as a destructive test.
-- Last recorded full Bridge test run: **87 passed**. Rerun before relying on this checkout because the machine may have changed since that run.
-- The selected voice setup and third-party model files live under `%LOCALAPPDATA%\DesktopAiRobot`; they are intentionally outside the repository.
+- **Hardware is connected and was exercised end-to-end.** `COM9` (`303A:1001`), firmware `voice-device-1.8`, `device_bad_crc=0`, `screen_cached_frames=64`, face `READY`, speaker `audio_down_ack` matching `audio_down_sent` (122/122 and 326/323 samples during test sentences).
+- **Runtime data store was consolidated.** The real store had been created under the Codex package's redirected `LOCALAPPDATA` while the machine anchor pointed at an empty duplicate (random key, no models). The real store (local access key (not stored in Git), 0.88 GB Whisper/Kokoro models, 12.83 GB Paimon install, real history) was moved to `%LOCALAPPDATA%\DesktopAiRobot`; the old duplicate is preserved as `DesktopAiRobot.stale-20261017-200318`. The anchor is consistent again.
+- **Bridge startup is now one command** through `scripts/start_bridge.ps1`, which pins `ROBOT_DATA_DIR` from the anchor, verifies models/plugin, starts uvicorn detached, and supports `-Restart`.
+- **Harness session lifecycle was verified with a disposable session**: a Bridge-created Harness draft answered `bridge-ok`, then was permanently deleted (`native_session_deleted=true`) and disappeared from the catalog. The delete route was re-probed after a Bridge restart and returns `session-not-found` for an invalid ID instead of a missing-route 404.
+- **The missing DSH plugin is now vendored in-repo** at `plugins/dsh-plugin-session-delete` with an idempotent offline installer (`scripts/install_dsh_plugin.ps1`). The `web` profile dependency now uses the local `file:` path.
+- **Paimon and Kokoro both played through the robot speaker** in this session (Paimon via `/api/tts/speak`, English via Kokoro earlier). No synthesis or CRC errors.
+- **Local STT was verified with a round trip**: Paimon synthesized `今天天气不错，我们测试一下语音识别。`, and `faster-whisper small` recognized it correctly (punctuation dropped). This exercises the model cache after the store move.
+- **The physical button captured speech during this session**: presses produced 55,680 and 52,352 PCM samples, and Whisper transcribed `這樣就說好了`, `1加1等于1`, and `dbs你现在用的是什么模型`. The first two returned 409 `session_busy`; the last returned 409 `permission_denied`. Source inspection confirmed Hermes 0.22.1's `admit_api_steps` refuses any target whose session source is not `api_server`/`bot_room`, so a desktop session can never receive an API turn.
+- **Hermes routing was corrected for that policy**: Bridge now prefers API-created sessions, creates one when none exists, and refuses a desktop target with an actionable Chinese message *before* sending. A dedicated conversation (`桌面机器人专用会话`) was created and exercised twice (`机器人已就绪`, `链路正常`); the persisted voice target now points at it. A fresh disposable Hermes conversation also answered and was deleted.
+- **Remote access through Tailscale Serve was verified from the host**: `https://<host>.<tailnet>.ts.net/` served the page and the authenticated API, login returned a `Secure` + `HttpOnly` cookie, and `/api/status` reported the device. Serve is tailnet-only (no Funnel). `ROBOT_TAILNET_HOST` is set at User scope, so a scheduled task inherits it.
+- **Bulk deletion was exercised with two disposable local drafts**: `deleted=2, failed=0`, and no catalog residue remained. Native multi-session deletion still needs a disposable-session run.
+- Last full Bridge test run: **108 passed** (`python -m pytest bridge/tests -q`), including 9 vendored-plugin tests, 2 Hermes error-detail tests, and 3 Hermes source-routing tests.
 
 ## Known follow-up work
 
-1. Recheck Bridge startup and the authenticated remote page from the dedicated Android phone after a fresh restart; prior remote access hit an `Invalid host header` issue before the Tailscale Serve/host configuration was corrected.
-2. Verify bulk deletion against multiple disposable Harness sessions and confirm errors remain visible long enough to read. Avoid using real conversations for destructive tests.
+1. Run one clean **button → reply → speech** loop on the new API-backed session. Capture, STT, Hermes API continuation and TTS are each verified; this one combined press is the remaining physical check.
+2. Confirm the remote page **from the physical Android phone** (`redmi-note-11t-pro` is online in the tailnet). Serve, TLS, host header and the secure cookie are verified from this machine; the phone still needs to open the URL and enter the access key.
+3. Native Harness batch deletion and persistent failure selection are verified; continue regression testing with disposable sessions only.
 3. Keep the mobile sidebar gestures and desktop layout usable at narrow widths; the web UI is shared across devices.
-4. Document a clean-machine installation path for the optional Paimon/Kokoro/Whisper models and the Harness delete plugin, without copying model weights or credentials into Git.
-5. Consider a small Windows service/startup setup only after confirming the desired restart and privacy behavior.
+4. Optional: move Bridge startup into a per-user scheduled task after confirming the desired restart/privacy behavior. Do not install it as a system service (different `LOCALAPPDATA` would fork the store).
+5. The 404 diagnostic now points at `scripts/install_dsh_plugin.ps1`; keep that message aligned if the plugin layout changes.
 
 ## Local setup and safety
 
-Install Python dependencies with `python -m pip install -r requirements.txt`. Run the Bridge from the repository root with `python -m uvicorn bridge.app.main:app --host 127.0.0.1 --port 8787`. Install PlatformIO and use `voice-device/platformio.ini` for firmware builds. See the root `README.md` and `voice-device/README.md` for detailed setup and pin mappings.
+See [docs/SETUP.md](docs/SETUP.md) for a clean-machine install, store recovery and verification checklist. Short version:
 
-Runtime data, access keys, API keys, local databases, logs, virtual environments, model weights, and PlatformIO build output must stay out of version control. Keep the GitHub repository private while the project's security and deployment model is still evolving. Rotate any credential that has ever been pasted into a public location.
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+powershell -ExecutionPolicy Bypass -File .\scripts\install_dsh_plugin.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\start_bridge.ps1
+```
+
+Install PlatformIO and use `voice-device/platformio.ini` for firmware builds; stop the Bridge before flashing because it owns the serial port.
+
+Runtime data, access keys, API keys, local databases, logs, virtual environments, model weights, and PlatformIO build output must stay out of version control. The GitHub repository is public; publish source and sanitized status only. Rotate any credential that has ever been pasted into a public location.

@@ -1,0 +1,19 @@
+name: Bridge and web tests
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python -m pip install -r requirements-dev.txt
+      - run: python -m pytest bridge/tests -q
+      - run: node --test web-client/tests/ui-state.test.cjs
+      - run: node --check web-client/app.js

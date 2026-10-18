@@ -121,3 +121,28 @@ def test_batch_delete_removes_all_selected_drafts_and_reports_missing_items(tmp_
         '/api/sessions', params={'source': 'hermes'}).json()['items']}
     assert first['id'] not in remaining_ids
     assert second['id'] not in remaining_ids
+
+
+def test_purged_harness_session_never_reappears_from_stale_native_catalog(tmp_path):
+    database, catalog = setup_catalog(tmp_path)
+    class CachedHost:
+        def rpc(self, method):
+            return {'items': [{'sessionId': 'disposable-native', 'updatedAt': 1}]}
+        def delete_session_permanently(self, session_id):
+            assert session_id == 'disposable-native'
+    from types import SimpleNamespace
+    catalog.harness = SimpleNamespace(client=CachedHost(), snapshot=lambda: {'running': False, 'pending': 0})
+    assert catalog.catalog('deepseek_harness')['items']
+    assert catalog.delete('deepseek_harness', 'disposable-native')['native_session_deleted']
+    assert catalog.catalog('deepseek_harness')['items'] == []
+    with pytest.raises(ValueError):
+        catalog.resolve('deepseek_harness', 'disposable-native')
+    # Filtering is durable, not just a transient browser optimization.
+    restored = type(catalog)(database, catalog.hermes, catalog.harness)
+    assert restored.catalog('deepseek_harness')['items'] == []
+    from bridge.app.harness import HarnessWorker
+    host = CachedHost()
+    host.installed = False
+    host.exe = tmp_path / 'not-installed.exe'
+    worker = HarnessWorker(database, tmp_path, client=host)
+    assert worker._preferred_session_info() is None

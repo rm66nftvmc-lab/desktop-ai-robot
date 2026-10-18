@@ -34,6 +34,7 @@ let voiceTargetSave = Promise.resolve();
 let voiceTargetRevision = 0;
 let lastVoiceTargetKey = "";
 let lastVoiceError = "";
+let statusLoading = false;
 for (const target of conversationTargets) {
   try { selectedSessions[target] = sessionStorage.getItem(`conversation:${target}`); } catch {}
 }
@@ -255,14 +256,28 @@ async function deleteConversations(target, items, button) {
   sendButton.disabled = true;
   button.disabled = true;
   sessionDeleteInProgress = true;
+  let actionError = "";
   try {
     // Wait for a catalog poll that started before deletion. It discards its results
     // while sessionDeleteInProgress is true, so it cannot overwrite our final UI.
     if (sessionsLoading) await sessionsLoading;
-    const result = await request("/api/sessions/batch", {
-      method: "DELETE",
-      body: JSON.stringify({ source: target, session_ids: items.map((item) => item.id) }),
-    });
+    const result = { deleted: [], failed: [] };
+    for (let offset = 0; offset < items.length; offset += 5) {
+      const chunk = items.slice(offset, offset + 5);
+      try {
+        const response = await request("/api/sessions/batch", {
+          method: "DELETE", timeout: 240000,
+          body: JSON.stringify({ source: target, session_ids: chunk.map((item) => item.id) }),
+        });
+        const outcome = BridgeUI.deletionOutcome(chunk, response);
+        result.deleted.push(...outcome.deleted.map((item) => ({ session_id: item.id })));
+        result.failed.push(...outcome.failed);
+      } catch (error) {
+        result.failed.push(...items.slice(offset).map((item) => ({ session_id: item.id, error: error.message })));
+        break;
+      }
+      $("#session-status").textContent = `已处理 ${Math.min(offset + 5, items.length)} / ${items.length} 个会话`;
+    }
     const deletedIds = new Set((result.deleted || []).map((item) => item.session_id));
     const failures = (result.failed || []).map((failure) => {
       const item = items.find((candidate) => candidate.id === failure.session_id);
@@ -277,7 +292,8 @@ async function deleteConversations(target, items, button) {
     sessionBulkState[target].selected.clear();
     for (const failure of result.failed || []) sessionBulkState[target].selected.add(failure.session_id);
     sessionBulkState[target].active = failures.length > 0;
-    sessionActionError = failures.length ? `删除失败：${failures.join("；")}` : "";
+    actionError = failures.length ? `删除失败：${failures.join("；")}` : "";
+    sessionActionError = actionError;
     $("#session-error").textContent = sessionActionError;
     $("#session-status").textContent = deleted.length ? `已删除 ${deleted.length} 个会话` : "";
     if (wasSelected && source.value === target && next) {
@@ -297,10 +313,12 @@ async function deleteConversations(target, items, button) {
       renderSessions();
     }
   } catch (error) {
-    sessionActionError = `删除失败：${error.message}`;
+    actionError = `删除失败：${error.message}`;
+    sessionActionError = actionError;
     $("#session-error").textContent = sessionActionError;
     renderSessions();
   } finally {
+    sessionActionError = actionError;
     sessionDeleteInProgress = false;
     button.disabled = false;
     prompt.disabled = previousDisabled.prompt;
@@ -370,6 +388,7 @@ function saveAudioOutput(change) {
 }
 
 function updateApproval(approval) {
+  const previousRequest = pendingApproval?.request_id;
   pendingApproval = approval || null;
   const panel = $("#approval-panel");
   panel.hidden = !pendingApproval;
@@ -379,7 +398,7 @@ function updateApproval(approval) {
   }
   $("#approval-description").textContent = pendingApproval.description || "Hermes 正在等待你的决定。";
   $("#approval-command").textContent = pendingApproval.command || "未提供命令预览，请谨慎审批。";
-  if (!workspace.hidden) setSidebar(true, { restoreFocus: false });
+  if (!workspace.hidden && previousRequest !== pendingApproval.request_id) setSidebar(true, { restoreFocus: false });
 }
 
 async function resolveApproval(choice) {
@@ -416,7 +435,7 @@ async function playSpeech(text, button, errorBox) {
   $("#playback-status").textContent = "正在本机生成并播放语音…";
   try {
     const result = await request("/api/tts/speak", {
-      method: "POST", body: JSON.stringify({ text }),
+      method: "POST", timeout: 180000, body: JSON.stringify({ text }),
     });
     if (requestId === playbackRequestId) {
       $("#playback-status").textContent = result.muted ? "已静音，回复仅显示文字。" : result.superseded ?
@@ -432,19 +451,7 @@ async function playSpeech(text, button, errorBox) {
 }
 
 async function request(path, options = {}) {
-  const response = await fetch(path, {
-    credentials: "same-origin",
-    cache: "no-store",
-    headers: { "Content-Type": "application/json" },
-    ...options,
-  });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const error = new Error(body.detail || `请求失败 (${response.status})`);
-    error.status = response.status;
-    throw error;
-  }
-  return body;
+  return BridgeUI.request(path, options);
 }
 
 function showLogin() {
@@ -472,6 +479,7 @@ function setSidebar(open, { restoreFocus = true } = {}) {
   trigger.setAttribute("aria-expanded", String(open));
   trigger.setAttribute("aria-label", open ? "关闭桌面 AI 机器人侧栏" : "打开桌面 AI 机器人侧栏");
   backdrop.hidden = !open;
+  $(".conversation").inert = open;
   if (open) $("#sidebar-close").focus({ preventScroll: true });
   else if (restoreFocus && !workspace.hidden) trigger.focus({ preventScroll: true });
 }
@@ -492,6 +500,13 @@ document.addEventListener("keydown", (event) => {
     event.preventDefault();
     setSidebar(false);
   }
+  if (event.key === "Tab" && !$("#sidebar").inert) {
+    const controls = [...$("#sidebar").querySelectorAll("button, input, select, summary, [tabindex='0']")]
+      .filter((element) => !element.disabled && element.getClientRects().length);
+    const first = controls[0], last = controls.at(-1);
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+  }
 });
 
 document.addEventListener("pointerdown", (event) => {
@@ -500,17 +515,15 @@ document.addEventListener("pointerdown", (event) => {
   const open = !$("#sidebar").inert;
   if (!open && event.clientX > window.innerWidth / 4) return;
   if (open && !$("#sidebar").contains(event.target)) return;
-  sidebarSwipeStart = { x: event.clientX, y: event.clientY, open };
+  sidebarSwipeStart = { x: event.clientX, y: event.clientY, open, id: event.pointerId };
 }, { passive: true });
 document.addEventListener("pointerup", (event) => {
   if (!sidebarSwipeStart) return;
   const start = sidebarSwipeStart;
   sidebarSwipeStart = null;
-  const dx = event.clientX - start.x;
-  const dy = event.clientY - start.y;
-  if (Math.abs(dx) < 64 || Math.abs(dy) > 84) return;
-  if (!start.open && dx > 0 && start.x <= window.innerWidth / 4) setSidebar(true, { restoreFocus: false });
-  else if (start.open && dx < 0) setSidebar(false, { restoreFocus: false });
+  if (event.pointerId !== start.id) return;
+  const next = BridgeUI.swipe(start, { x: event.clientX, y: event.clientY }, window.innerWidth);
+  if (next !== null) setSidebar(next, { restoreFocus: false });
 }, { passive: true });
 document.addEventListener("pointercancel", () => { sidebarSwipeStart = null; }, { passive: true });
 
@@ -533,10 +546,15 @@ function updateDevice(link) {
 }
 
 async function refreshStatus() {
+  if (statusLoading) return false;
+  statusLoading = true;
   try {
     const status = await request("/api/status");
     showWorkspace();
     updateDevice(status.device);
+    const task = status.task || { label: "准备就绪", state: "idle" };
+    $("#task-status").textContent = task.detail ? `${task.label} · ${task.detail}` : task.label;
+    $("#task-status").dataset.state = task.state;
     if (!audioPending && !volumeTimer && status.audio_output) renderAudioOutput(status.audio_output);
     const voiceStatus = status.tts || {};
     const paimonOption = $("#voice-select option[value='paimon']");
@@ -564,7 +582,7 @@ async function refreshStatus() {
     if (error.status === 401) showLogin();
     else if (!workspace.hidden) $("#connection-state").textContent = "Bridge 暂时无法连接，正在重试…";
     return false;
-  }
+  } finally { statusLoading = false; }
 }
 
 function deliveryLabel(item) {
@@ -797,3 +815,29 @@ window.addEventListener("focus", () => { if (!workspace.hidden) { lastVoiceTarge
 setInterval(() => { if (!workspace.hidden) refreshMessages(); }, 2000);
 setInterval(() => { if (!workspace.hidden) { refreshStatus(); } }, 2000);
 setInterval(() => { if (!workspace.hidden) refreshSessions(); }, 6000);
+
+// Keep the composer above Android/iOS on-screen keyboards.
+function fitViewport() {
+  if (!window.visualViewport || window.visualViewport.scale === 1) {
+    document.documentElement.style.setProperty("--app-height", `${window.visualViewport?.height || window.innerHeight}px`);
+  }
+}
+window.visualViewport?.addEventListener("resize", fitViewport);
+window.addEventListener("resize", fitViewport);
+fitViewport();
+
+document.querySelector("#download-diagnostics").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  button.disabled = true;
+  $("#diagnostics-error").textContent = "";
+  try {
+    const report = await request("/api/diagnostics");
+    const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], { type: "application/json" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `robot-diagnostics-${new Date().toISOString().slice(0, 10)}.json`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  } catch (error) { $("#diagnostics-error").textContent = error.message; }
+  finally { button.disabled = false; }
+});

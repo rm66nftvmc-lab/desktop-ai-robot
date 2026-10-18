@@ -25,7 +25,7 @@ def find_port() -> str | None:
 class DeviceLink:
     MAX_CAPTURE_BYTES = 60 * 16000 * 2
 
-    def __init__(self, on_capture=None, on_listen_start=None, *, audio_output=None):
+    def __init__(self, on_capture=None, on_listen_start=None, *, audio_output=None, on_disconnect=None):
         self.audio_output = audio_output if audio_output is not None else AudioOutput()
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -34,6 +34,7 @@ class DeviceLink:
         self._last_capture = b""
         self._on_capture = on_capture
         self._on_listen_start = on_listen_start
+        self._on_disconnect = on_disconnect
         self._capture_generation = 0
         self._playback: bytes | None = None
         self._playback_offset = 0
@@ -145,6 +146,7 @@ class DeviceLink:
             self._playback_offset = 0
             self._playback_open = False
             self._state["playing"] = False
+            self._state["last_error"] = None
             return self._playback_generation
 
     def is_current_generation(self, generation: int) -> bool:
@@ -197,6 +199,28 @@ class DeviceLink:
         with self._lock:
             self._state.update(fields)
 
+    def _connection_lost(self) -> None:
+        with self._lock:
+            active = self._state["connected"] or self._state["listening"] or self._state["playing"]
+            self._capture_generation += 1
+            self._capture.clear()
+            self._last_capture = b""
+            self._playback_generation += 1
+            self._playback = None
+            self._playback_offset = 0
+            self._playback_open = False
+            self._state.update(connected=False, listening=False, playing=False, device_playing=False)
+        if active and self._on_disconnect:
+            self._on_disconnect()
+
+    def _fail_playback(self, error: str) -> None:
+        with self._lock:
+            self._playback_generation += 1
+            self._playback = None
+            self._playback_open = False
+            self._state.update(playing=False, last_error=error)
+        self.set_face(faces.ERROR)
+
     def _handle(self, frame: protocol.Frame, port: serial.Serial, sequence: int) -> int:
         if frame.kind == protocol.HELLO:
             try:
@@ -206,6 +230,8 @@ class DeviceLink:
             if hello.get("protocol") != 1:
                 self._update(last_error="Unsupported device protocol")
                 return sequence
+            if self.snapshot()["connected"]:
+                self._connection_lost()
             self._update(connected=True, firmware=hello.get("firmware"), last_error=None)
             self.set_face(faces.READY)
             port.write(protocol.encode(protocol.WELCOME, sequence, b'{"protocol":1}'))
@@ -258,7 +284,7 @@ class DeviceLink:
                     self._last_capture = bytes(self._capture)
                     self._capture.clear()
                 self.set_face(faces.THINK)
-                if self._on_capture and self._last_capture:
+                if self._on_capture:
                     self._on_capture(self.last_capture_wav(), capture_generation)
         elif frame.kind == protocol.AUDIO_UP and len(frame.payload) % 2 == 0:
             samples = struct.unpack(f"<{len(frame.payload) // 2}h", frame.payload)
@@ -281,7 +307,7 @@ class DeviceLink:
             name = find_port()
             self._update(present=bool(name), port=name)
             if not name:
-                self._update(connected=False, listening=False)
+                self._connection_lost()
                 self.set_face(faces.SLEEP)
                 self._stop.wait(1)
                 continue
@@ -295,6 +321,7 @@ class DeviceLink:
                     in_flight = 0
                     playback_active = False
                     last_ack = 0.0
+                    last_seen = time.monotonic()
                     with self._lock:
                         active_generation = self._playback_generation
                     while not self._stop.is_set():
@@ -306,6 +333,7 @@ class DeviceLink:
                             sequence = (sequence + 1) & 0xFFFF
                             next_heartbeat = now + 1
                         for frame in parser.feed(port.read(4096)):
+                            last_seen = time.monotonic()
                             sequence = self._handle(frame, port, sequence)
                             if frame.kind == protocol.BUTTON and frame.payload == b"\x01":
                                 in_flight = 0
@@ -316,21 +344,15 @@ class DeviceLink:
                                 with self._lock:
                                     self._state["audio_down_ack"] += 1
                                 if frame.payload != b"\x01":
-                                    with self._lock:
-                                        self._playback = None
-                                        self._playback_open = False
-                                        self._state["playing"] = False
-                                        self._state["last_error"] = "Speaker buffer write failed"
+                                    self._fail_playback("扬声器缓冲写入失败，请重新朗读")
                                     in_flight = 0
                                     playback_active = False
                                     port.write(protocol.encode(protocol.AUDIO_END, sequence))
                                     sequence = (sequence + 1) & 0xFFFF
+                        if time.monotonic() - last_seen > 8:
+                            raise serial.SerialException("Device heartbeat timeout")
                         if playback_active and in_flight and time.monotonic() - last_ack > 5:
-                            with self._lock:
-                                self._playback = None
-                                self._playback_open = False
-                                self._state["playing"] = False
-                                self._state["last_error"] = "Speaker acknowledgement timeout"
+                            self._fail_playback("扬声器回执超时，请检查连接后重新朗读")
                             in_flight = 0
                             playback_active = False
                             port.write(protocol.encode(protocol.AUDIO_END, sequence))
@@ -384,11 +406,6 @@ class DeviceLink:
             except (serial.SerialException, OSError, ValueError) as exc:
                 self._update(last_error=type(exc).__name__)
             finally:
-                with self._lock:
-                    self._playback_generation += 1
-                    self._playback = None
-                    self._playback_open = False
-                    self._state["playing"] = False
-                self._update(connected=False, listening=False)
+                self._connection_lost()
                 self.set_face(faces.SLEEP)
             self._stop.wait(1)

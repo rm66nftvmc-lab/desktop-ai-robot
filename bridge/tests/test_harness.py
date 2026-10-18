@@ -6,6 +6,25 @@ from bridge.app.harness import HarnessClient, HarnessWorker, backend_overlay, co
 from bridge.app.storage import initialize
 
 
+def test_expired_harness_cookie_refreshes_once_without_retrying_ambiguous_writes(tmp_path, monkeypatch):
+    client = HarnessClient(tmp_path)
+    expired = _RouteOpener([urllib.error.HTTPError('http://local/api/test', 401, 'expired', {}, None)])
+    fresh = _RouteOpener([{'result': {'ok': True, 'value': {'sessionId': 'fresh'}}}])
+    client._opener = expired
+    logins = []
+    def login():
+        logins.append(True)
+        client._opener = fresh
+    monkeypatch.setattr(client, '_login', login)
+    monkeypatch.setattr(client, 'start', lambda: None)
+    assert client.rpc('session/create') == {'sessionId': 'fresh'}
+    assert logins == [True]
+    client._opener = _RouteOpener([urllib.error.URLError('lost')])
+    with pytest.raises(RuntimeError, match='不会自动重发'):
+        client.rpc('session/prompt')
+    assert logins == [True]
+
+
 def record(seq, kind, data):
     return {'type': 'event', 'event': {'seq': seq, 'type': kind, 'data': data}}
 

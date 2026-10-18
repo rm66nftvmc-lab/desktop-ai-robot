@@ -1,0 +1,17 @@
+# The bundle patch this package is installed as.
+#
+# A profile composes its plugin tree from the bundles listed in its own
+# package.json (`dsh.profile.bundles`) plus its cordis.patch.yml. Declaring this
+# file through `dsh.bundle.patch` is what lets DSH install the package as a
+# BUNDLE: the installer adds the name to `dsh.profile.bundles`, and the row below
+# is inserted by this layer — no hand-editing of the profile's patch file.
+#
+# The row is dual-face:
+#   * the node half (lib/index.js) registers POST /api/session.delete inside
+#     Connection's authenticated /api fence;
+#   * the browser half (lib/client.js, discovered through `dsh.client` plus
+#     exports["./client"]) adds the delete row to every Session's "..." menu and
+#     the blank-Session cleanup action at the sidebar foot.
+- insert:
+    - id: session-delete
+      name: 'dsh-plugin-session-delete'

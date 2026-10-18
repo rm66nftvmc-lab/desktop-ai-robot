@@ -13,3 +13,12 @@ access-token.txt
 .env.*
 !.env.example
 models/
+*-api-key.txt
+*-token.txt
+robot-diagnostics-*.json
+*.wav
+*.pcm
+*.onnx
+*.pth
+*.pt
+*.ckpt

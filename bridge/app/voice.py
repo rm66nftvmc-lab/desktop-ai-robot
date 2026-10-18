@@ -63,6 +63,7 @@ class VoiceConversation:
             target = dict(self._selected_target)
         with self._lock:
             return {"state": self._state, "last_error": self._last_error,
+                    "capture_generation": self._capture_generation,
                     "message_id": self._message_id, "target": target,
                     "capture_target": dict(self._capture_target)}
 
@@ -72,6 +73,23 @@ class VoiceConversation:
             set_setting(self.database, "voice_target", json.dumps(target))
             self._selected_target = target
         return dict(target)
+
+    def on_speech_error(self, error: str, capture_generation: int) -> None:
+        with self._lock:
+            if capture_generation != self._capture_generation:
+                return
+            self._state, self._last_error = "error", error
+        self.device.set_face(faces.ERROR)
+
+    def on_device_disconnect(self) -> None:
+        # Keep already-sent agent work in the text history. Invalidate capture
+        # and speech so reconnecting never replays or resends an old task.
+        with self._lock:
+            self._capture_generation += 1
+            self._output_generation += 1
+            self._message_id = None
+            self._state = "interrupted"
+            self._last_error = "设备已断开，本轮语音已停止；已发送的消息仍可在会话查看，重连后可重新录音"
 
     def on_listen_start(self, capture_generation: int) -> None:
         # Never call a network API on the serial receive thread. Selection was
@@ -279,7 +297,11 @@ class VoiceConversation:
                         self._state = "approval_pending" if kind == "approval" else "sent_to_device"
                         self._last_error = None
             except SynthesisCancelled:
-                pass
+                with self._lock:
+                    if (message_id == self._message_id
+                            and output_generation == self._output_generation):
+                        self._state = "interrupted"
+                        self._last_error = "本轮播放已中断，可在消息下重新朗读"
             except Exception as exc:
                 with self._lock:
                     if (message_id == self._message_id

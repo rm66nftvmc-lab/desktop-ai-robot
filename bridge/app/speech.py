@@ -8,9 +8,10 @@ from pathlib import Path
 
 
 class SpeechWorker:
-    def __init__(self, model_cache: Path, on_transcript=None):
+    def __init__(self, model_cache: Path, on_transcript=None, on_error=None):
         self.model_cache = model_cache
         self.on_transcript = on_transcript
+        self.on_error = on_error
         self._jobs: queue.Queue[tuple[bytes, int] | None] = queue.Queue(maxsize=2)
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
@@ -33,14 +34,20 @@ class SpeechWorker:
 
     def enqueue(self, wav: bytes | None, capture_generation: int = 0) -> None:
         if wav is None or len(wav) < 44 + 16000:  # At least 0.5 seconds of PCM.
+            self._failed("录音不足半秒，请重新按键录音", capture_generation)
             return
         try:
             self._jobs.put_nowait((wav, capture_generation))
             with self._lock:
-                self._status["state"] = "queued"
+                self._status.update(state="queued", last_error=None, capture_generation=capture_generation)
         except queue.Full:
-            with self._lock:
-                self._status["last_error"] = "Speech queue full"
+            self._failed("语音识别队列已满，请稍后重新录音", capture_generation)
+
+    def _failed(self, error, generation):
+        with self._lock:
+            self._status.update(state="error", last_error=error, capture_generation=generation)
+        if self.on_error:
+            self.on_error(error, generation)
 
     def snapshot(self) -> dict:
         with self._lock:
@@ -58,7 +65,7 @@ class SpeechWorker:
                 return
             wav, capture_generation = job
             with self._lock:
-                self._status.update(state="transcribing", last_error=None)
+                self._status.update(state="transcribing", last_error=None, capture_generation=capture_generation)
             try:
                 if model is None:
                     from faster_whisper import WhisperModel
@@ -84,5 +91,4 @@ class SpeechWorker:
                 if self.on_transcript:
                     self.on_transcript(text, capture_generation)
             except Exception as exc:
-                with self._lock:
-                    self._status.update(state="error", last_error=f"{type(exc).__name__}: {exc}")
+                self._failed(f"本地识别失败（{type(exc).__name__}），请检查模型后重新录音", capture_generation)

@@ -18,6 +18,12 @@ from .storage import add_message, get_setting, set_delivery, set_setting
 
 SESSION_SETTING = "hermes_session_id"
 
+#: Hermes 0.22.x refuses API writes into sessions owned by another surface
+#: (``session_api_turn.admit_api_steps`` raises ``permission_denied`` for any
+#: source outside this set). The Bridge must therefore route to sessions the
+#: API itself created, never to a desktop conversation.
+API_WRITABLE_SOURCES = frozenset({"api_server", "bot_room"})
+
 
 def hermes_executable() -> str | None:
     found = shutil.which("hermes")
@@ -47,17 +53,36 @@ def latest_desktop_session(state_db: Path) -> str | None:
     return info["id"] if info else None
 
 
+def latest_api_session_info(state_db: Path) -> dict | None:
+    """Newest session the Hermes API may write into (not a desktop session)."""
+    if not state_db.is_file():
+        return None
+    try:
+        with sqlite3.connect(f"file:{state_db.as_posix()}?mode=ro", uri=True, timeout=2) as db:
+            row = db.execute(
+                "SELECT id, title, last_activity_at, source FROM sessions "
+                "WHERE source IN ('api_server', 'bot_room') "
+                "AND COALESCE(archived, 0) = 0 AND COALESCE(hidden, 0) = 0 "
+                "ORDER BY last_activity_at DESC LIMIT 1"
+            ).fetchone()
+        return ({"id": row[0], "title": row[1], "last_activity_at": row[2], "source": row[3]}
+                if row else None)
+    except sqlite3.Error:
+        return None
+
+
 def session_info(state_db: Path, session_id: str) -> dict | None:
     if not state_db.is_file():
         return None
     try:
         with sqlite3.connect(f"file:{state_db.as_posix()}?mode=ro", uri=True, timeout=2) as db:
             row = db.execute(
-                "SELECT id, title, last_activity_at FROM sessions WHERE id = ? "
+                "SELECT id, title, last_activity_at, source FROM sessions WHERE id = ? "
                 "AND COALESCE(archived, 0) = 0 AND COALESCE(hidden, 0) = 0 LIMIT 1",
                 (session_id,),
             ).fetchone()
-        return {"id": row[0], "title": row[1], "last_activity_at": row[2]} if row else None
+        return ({"id": row[0], "title": row[1], "last_activity_at": row[2], "source": row[3]}
+                if row else None)
     except sqlite3.Error:
         return None
 
@@ -136,14 +161,36 @@ class HermesWorker:
                     "approval": dict(self._pending_approval) if self._pending_approval else None}
 
     def _preferred_session_info(self) -> dict | None:
+        """Continuation target for API delivery.
+
+        A desktop session is read-only for the API, so it is never a default
+        target: its API call would fail with ``permission_denied``. Prefer the
+        newest API-created session; return ``None`` when there is none so the
+        next run creates one.
+        """
         state_db = self.hermes_home / "state.db"
-        desktop = latest_desktop_session_info(state_db)
         selected_id = get_setting(self.database, SESSION_SETTING)
         selected = session_info(state_db, selected_id) if selected_id else None
-        if selected and desktop and selected["id"] != desktop["id"]:
-            if (desktop["last_activity_at"] or 0) > (selected["last_activity_at"] or 0):
-                return desktop
-        return selected or desktop
+        if selected and selected.get("source") not in API_WRITABLE_SOURCES:
+            selected = None
+        latest_api = latest_api_session_info(state_db)
+        if selected and latest_api and selected["id"] != latest_api["id"]:
+            if (latest_api["last_activity_at"] or 0) > (selected["last_activity_at"] or 0):
+                return latest_api
+        return selected or latest_api
+
+    def _check_api_target(self, session: str | None) -> None:
+        """Refuse a desktop target with an explanation instead of an opaque 409."""
+        if not self.api_client or not session:
+            return
+        info = session_info(self.hermes_home / "state.db", session)
+        if info is None or info.get("source") in API_WRITABLE_SOURCES:
+            return
+        title = info.get("title") or session
+        raise RuntimeError(
+            f"Hermes 会话「{title}」来自 {info.get('source', '未知')} 端，"
+            "Hermes API 不允许写入非 API 会话。请在网页 Hermes 分组点“+ 新建”，"
+            "选中新会话后重新按键或发送。")
 
     def pending_approval(self) -> dict | None:
         with self._lock:
@@ -305,6 +352,7 @@ class HermesWorker:
             self._last_run_session = None
             try:
                 session, conversation = message_route(self.database, message_id, session)
+                self._check_api_target(session)
                 answer = self._ask(text, session)
                 with self._lock:
                     cancelled = message_id in self._cancelled

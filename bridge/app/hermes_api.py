@@ -36,9 +36,38 @@ class HermesRunsClient:
             with self._opener.open(request, timeout=timeout) as response:
                 return json.load(response)
         except urllib.error.HTTPError as exc:
-            raise RuntimeError(f"Hermes API returned HTTP {exc.code}") from None
+            detail = self._error_detail(exc)
+            raise RuntimeError(f"Hermes API returned HTTP {exc.code}{detail}") from None
         except (urllib.error.URLError, TimeoutError) as exc:
             raise RuntimeError(f"Hermes API unavailable: {type(exc).__name__}") from None
+
+    @staticmethod
+    def _error_detail(exc: urllib.error.HTTPError) -> str:
+        """Keep the Gateway's error code/message instead of only the status line.
+
+        A bare "HTTP 409" leaves the user guessing; the Gateway sends a JSON
+        envelope such as ``{"error": {"code": "session_busy", ...}}``.
+        """
+        try:
+            raw = exc.read()
+            if not raw:
+                return ""
+            payload = json.loads(raw.decode("utf-8", "replace"))
+        except (ValueError, OSError, TypeError):
+            return ""
+        if not isinstance(payload, dict):
+            return ""
+        error = payload.get("error")
+        if isinstance(error, dict):
+            code = str(error.get("code") or "").strip()
+            message = str(error.get("message") or "").strip()
+        elif isinstance(error, str):
+            code, message = "", error.strip()
+        else:
+            code, message = "", str(payload.get("detail") or "").strip()
+        detail = f"{code}: {message}" if code and message else (code or message)
+        detail = detail[:300]
+        return f" ({detail})" if detail else ""
 
     def capabilities(self) -> dict:
         return self._request("GET", "/v1/capabilities")

@@ -58,6 +58,8 @@
       </details>
 
       <div class="sidebar-bottom">
+        <button type="button" id="download-diagnostics" class="text-button">下载连接诊断</button>
+        <p id="diagnostics-error" class="form-error" role="alert"></p>
         <span>手机端仅使用文字输入</span>
         <button type="button" id="logout" class="text-button">退出登录</button>
       </div>
@@ -111,6 +113,7 @@
       <div id="messages" class="timeline" role="log" aria-label="对话消息" aria-live="polite" aria-relevant="additions text"></div>
 
       <div class="composer-dock">
+        <p id="task-status" class="task-status" role="status" aria-live="polite">准备就绪</p>
         <form id="composer" class="composer">
           <label class="visually-hidden" for="prompt">输入消息</label>
           <textarea id="prompt" rows="3" maxlength="4000" placeholder="给 Hermes 发消息…"></textarea>
@@ -123,6 +126,7 @@
       </div>
     </main>
   </div>
-  <script src="/assets/app.js?v=23" defer></script>
+  <script src="/assets/ui-state.js?v=1" defer></script>
+  <script src="/assets/app.js?v=24" defer></script>
 </body>
 </html>

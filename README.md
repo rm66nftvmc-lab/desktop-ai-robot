@@ -1,6 +1,8 @@
 # 桌面 AI 机器人：软件层
 
-当前工作状态与后续事项见 [PROJECT_STATUS.md](PROJECT_STATUS.md)。
+当前工作状态与后续事项见 [PROJECT_STATUS.md](PROJECT_STATUS.md)；新机器部署、数据目录恢复和排错见 [docs/SETUP.md](docs/SETUP.md)。
+
+**2026-10-17 晚 · 硬件实测 + 完整性修复**：设备 `COM9` / `voice-device-1.8` / CRC 0 / 64 帧 PSRAM 缓存已在线确认；派蒙与 Kokoro 均经机器喇叭实际播放并收到全部下行回执。Bridge 真实数据目录此前被 Codex 的 `LOCALAPPDATA` 重定向分叉（锚点指向空库），已整体迁回 `%LOCALAPPDATA%\DesktopAiRobot` 并保持六位密钥 `<本机访问密钥>` 不变。缺失的 Harness 永久删除插件已按 MIT 附带进 `plugins/dsh-plugin-session-delete`，新增离线安装脚本 `scripts/install_dsh_plugin.ps1`；用一个一次性 Harness 会话验证了"建会话 → 回答 `bridge-ok` → 永久删除"闭环。新增 `scripts/start_bridge.ps1` 固定数据目录启动/重启。测试 **98 passed**。本轮还从主机端验证了 Tailscale Serve 的 HTTPS 登录与安全 Cookie、中文 TTS→Whisper 转写回环、两个本地草稿的批量删除，以及设备物理按键录音被 Whisper 正确转写；那次 Hermes 因目标会话正忙返回 409（新建临时 Hermes 会话问答与删除均成功），现在 409 会显示 Gateway 的错误码与说明。仍需用户实测：会话空闲时完整走一遍"按键→回复→朗读"、手机实体页面、多个原生会话的批量删除。
 
 三个目录各司其职：
 
@@ -9,8 +11,9 @@
 | `voice-device/` | ESP32-S3 固件：按键、I2S、屏幕和 USB CDC 传输 |
 | `bridge/` | 电脑常驻进程：认证、设备连接、会话、语音和适配器 |
 | `web-client/` | 手机/电脑共用的纯文字网页对话框，没有麦克风入口 |
+| `plugins/` | Bridge 的 Harness Host 所需的随仓库插件（离线可装） |
 
-## 当前可运行的部分
+## 历史实现与验证记录（当前状态以 PROJECT_STATUS.md 为准）
 
 **2026-10-15 按键语音跟随网页会话**：网页选择 AI/会话后，通过认证同源 `POST /api/voice/target` 同步并持久化按键目标。按下录音时冻结该目标，录音期间切换网页只影响下一次录音；本轮转写带 `conversation_id` 进入选中的 Hermes / DeepSeek Harness 会话，两者回复均自动排队朗读。下一轮按键取消原智能体的旧语音任务，丢弃过期转写/回复。静音继续仅显示文字。无会话、会话失效或豆包 PPT 不会回退发送 Hermes；审批口令只作用于同一 AI/会话的待审批请求。后台标签页轮询不抢路由，最近主动选择或获得焦点的网页控制单个机器人。76项测试通过；在线验证两个目标的会话路由同步成功，设备连接正常，派蒙/音量设置保持。新版本物理按键全流程仍需用户在刷新网页后实测。
 
@@ -26,13 +29,13 @@
 
 Hermes Gateway 只监听 `127.0.0.1:8642`，使用独立的随机长密钥，存放在 `%LOCALAPPDATA%\DesktopAiRobot\hermes-api-key.txt`；它与网页六位访问密钥分开。Hermes 等待工具审批时，网页会显示命令与说明。语音提示只朗读简短说明，批准前请在网页核对命令全文；语音识别结果只有严格匹配“同意审批”或“拒绝审批”才会提交决定。Gateway 接口不可用时，移除该密钥文件并重启 Bridge 可退回原命令行问答，但命令行模式不能处理中途审批。
 
-Bridge 已能在本机接收网页文字、按 Hermes / 豆包 PPT 网页分别保存消息，并显示 ESP32 是否握手连接。选择 Hermes 的消息现会通过本机 Hermes Gateway Runs API 送入最近使用的桌面会话，并将回复显示在网页；可为单条消息显式新建会话；之后的消息会继续该会话，除非桌面端切换到了更新的会话。豆包 PPT 网页仍只保存消息。固件 `voice-device-1.8` 已烧录：待机/思考 24 帧、朗读 16 帧，光流补帧后预缓存到 PSRAM；保留原动作时长，实际不同画面约 22 帧/秒，用户确认“顺滑了，画面正常”。设备通过带 CRC 的 USB 帧与 Bridge 握手、发送心跳和按键事件，并在按键启动收音时上传 16 kHz 单声道 PCM。按键结束收音后，Bridge 用本地 `faster-whisper small` 将语音转成文字，自动作为 Hermes 消息保存并发送；Hermes 回复自动进入本地 Kokoro 语音合成，经 USB 由机器人朗读。2026-10-14 已用实物确认“按键录音 → 本地转写 → Hermes 回复 → 自动朗读”闭环可用。屏幕显示 8 张**角色表情**作为桌面宠物的回应方式，素材是 MIT 授权的开源桌面宠物图集「deepseek 娘」（`f0909172434/deepseek-girl-codex-pet`）：`scripts/build_faces.py` 按 (行, 列) 从 8×11 图集切格、游程编码后编译进 flash，断电不丢、运行时不联网，设备在按键/播放/断连时自动换脸，电脑可用 `0x0C FACE` 帧覆盖 THINK / APPROVE / ERROR。映射已按上游 README 的行语义逐一对齐（BOOT=揮手、THINK=工作中、APPROVE=審查中、ERROR=失敗）。**固件 0.4 历史记录**：角色按 `build_faces.py` 的 `ROTATE_CCW = 90` **逆时针旋转 90°** 显示（生成阶段无损旋转，固件零改动）；当时 Flash 28.0%、632 KB 表情经符号表确认在镜像内。当前固件与动画背景实现见 `voice-device/README.md`。细节见 `voice-device/README.md`。新一轮按键会中止上一轮朗读，并取消尚未完成的上一轮语音 Hermes 请求；旧回复若迟到，不会再朗读。网页会标出语音消息，并可试听最近一次录音。识别模型运行时只从本地缓存加载。音频下行使用主控回执控制发送量，USB 接收队列设为 8 KB。播放过程中曾出现 USB 断连，功放 VIN 当时接主控 3V3；最终接法为功放 VIN 单独接 5V/VBUS，共地，SD 接 3V3。历史 Kokoro 测试时音量倍率为 0.21（当前上限已降至 0.12，见上方更新）；约 25 秒多句播报的 561 个音频帧均收到回执，设备保持连接，用户确认整段无杂音、音量能听清，也没有 USB 断连提示。
+Bridge 已能在本机接收网页文字、按 Hermes / 豆包 PPT 网页分别保存消息，并显示 ESP32 是否握手连接。**Hermes 0.22.1 起，Runs API 只允许写入 `api_server` / `bot_room` 来源的会话；桌面端（`desktop`）会话是只读的，强行写入会返回 409 `permission_denied`。** 因此 Bridge 现在默认续接自己创建的 API 会话（没有就新建一个），不再把消息送进桌面会话；网页 Hermes 分组里的桌面会话仍可查看历史，但按键/文字发送前请选择 API 会话或点“+ 新建”。2026-10-17 已用专用会话“桌面机器人专用会话”实测两轮问答（`机器人已就绪`、`链路正常`），无 409。豆包 PPT 网页仍只保存消息。固件 `voice-device-1.8` 已烧录：待机/思考 24 帧、朗读 16 帧，光流补帧后预缓存到 PSRAM；保留原动作时长，实际不同画面约 22 帧/秒，用户确认“顺滑了，画面正常”。设备通过带 CRC 的 USB 帧与 Bridge 握手、发送心跳和按键事件，并在按键启动收音时上传 16 kHz 单声道 PCM。按键结束收音后，Bridge 用本地 `faster-whisper small` 将语音转成文字，自动作为 Hermes 消息保存并发送；Hermes 回复自动进入本地 Kokoro 语音合成，经 USB 由机器人朗读。2026-10-14 已用实物确认“按键录音 → 本地转写 → Hermes 回复 → 自动朗读”闭环可用。屏幕显示 8 张**角色表情**作为桌面宠物的回应方式，素材是 MIT 授权的开源桌面宠物图集「deepseek 娘」（`f0909172434/deepseek-girl-codex-pet`）：`scripts/build_faces.py` 按 (行, 列) 从 8×11 图集切格、游程编码后编译进 flash，断电不丢、运行时不联网，设备在按键/播放/断连时自动换脸，电脑可用 `0x0C FACE` 帧覆盖 THINK / APPROVE / ERROR。映射已按上游 README 的行语义逐一对齐（BOOT=揮手、THINK=工作中、APPROVE=審查中、ERROR=失敗）。**固件 0.4 历史记录**：角色按 `build_faces.py` 的 `ROTATE_CCW = 90` **逆时针旋转 90°** 显示（生成阶段无损旋转，固件零改动）；当时 Flash 28.0%、632 KB 表情经符号表确认在镜像内。当前固件与动画背景实现见 `voice-device/README.md`。细节见 `voice-device/README.md`。新一轮按键会中止上一轮朗读，并取消尚未完成的上一轮语音 Hermes 请求；旧回复若迟到，不会再朗读。网页会标出语音消息，并可试听最近一次录音。识别模型运行时只从本地缓存加载。音频下行使用主控回执控制发送量，USB 接收队列设为 8 KB。播放过程中曾出现 USB 断连，功放 VIN 当时接主控 3V3；最终接法为功放 VIN 单独接 5V/VBUS，共地，SD 接 3V3。历史 Kokoro 测试时音量倍率为 0.21（当前上限已降至 0.12，见上方更新）；约 25 秒多句播报的 561 个音频帧均收到回执，设备保持连接，用户确认整段无杂音、音量能听清，也没有 USB 断连提示。
 
 网页使用聊天布局：用户消息显示在右侧蓝色气泡，Hermes 回复显示在左侧，并标出发送与回复状态。设备工具收在侧栏。网页和静态资源均返回 `Cache-Control: no-store`，避免 Edge 与内置浏览器分别显示过期版本；两个浏览器的登录 Cookie 仍各自独立。
 
 保留的原有声线为离线 Kokoro `zf_001` 女声，中文与常见英文词由本地发音词典处理。安装依赖后运行 `.\.venv\Scripts\python.exe scripts\download_kokoro.py`，会从 [kokoro-onnx 模型发布页](https://github.com/thewh1teagle/kokoro-onnx/releases/tag/model-files-v1.1) 下载量化模型与女声包，并从 [原模型仓库](https://huggingface.co/hexgrad/Kokoro-82M-v1.1-zh) 读取配置，保存在 `%LOCALAPPDATA%\DesktopAiRobot\models\tts`。下载可续传；文件完整就绪后 Bridge 自动使用女声，缺文件时仍用 Windows 本地中文语音。模型在 Bridge 启动时预加载，长回复分段合成并尽早开始播放。语音合成只在电脑运行，网页状态会显示当前声线。
 
-可选试听声线：用户选择试用 `cbw364/deepseek-dafeiyu` 项目所用的 GPT-SoVITS 派蒙模型。该公开项目没有附带模型文件；当前可下载版本由第三方转存，分享页说明分享者不是原作者，原作者仓库标注“严禁商用”。因此仅作为本机个人试听，不用于商业或公开发布。派蒙和 GPT-SoVITS 都安装在 `%LOCALAPPDATA%\DesktopAiRobot\tts-paimon`，使用独立 Python 环境；Bridge 仅访问绑定 `127.0.0.1:9880` 的本地服务，并强制模型库离线。首次安装可运行 `powershell -ExecutionPolicy Bypass -File .\scripts\setup_paimon_tts.ps1`，需下载 CUDA 运行时和若干 GB 的模型。安装完成后重启 Bridge，在“设备与语音工具”选择派蒙即可试听；随时切回 Kokoro。派蒙声线当前仅用于中文，含英文的文本会继续使用 Kokoro。派蒙服务异常时会回退到 Kokoro，不会改动或覆盖原有 Kokoro 模型。
+可选试听声线：用户选择试用 `cbw364/deepseek-dafeiyu` 项目所用的 GPT-SoVITS 派蒙模型。该公开项目没有附带模型文件；当前可下载版本由第三方转存，分享页说明分享者不是原作者，原作者仓库标注“严禁商用”。因此仅作为本机个人试听，不用于商业或公开发布。派蒙和 GPT-SoVITS 都安装在 `%LOCALAPPDATA%\DesktopAiRobot\tts-paimon`，使用独立 Python 环境；Bridge 仅访问绑定 `127.0.0.1:9880` 的本地服务，并强制模型库离线。首次安装可运行 `powershell -ExecutionPolicy Bypass -File .\scripts\setup_paimon_tts.ps1`，需下载 CUDA 运行时和若干 GB 的模型。安装完成后重启 Bridge，在“设备与语音工具”选择派蒙即可试听；随时切回 Kokoro。派蒙声线当前仅用于中文，含英文的文本会继续使用 Kokoro。派蒙服务异常时接口报错、不会静默改声线，可在“设备与语音工具”手动切回 Kokoro；切换不会改动或覆盖原有 Kokoro 模型。
 
 **2026-10-15 派蒙安装与实物试听完成**：默认中文声线已选为派蒙，用户确认“清晰，音量合适，保留派蒙”。本地生成的测试语音经机器人播放，132 个新增下行帧全部收到确认，设备持续连接、CRC 为 0。Kokoro 原模型与网页切换入口保留；选择备份为 `%LOCALAPPDATA%\DesktopAiRobot\tts-voice.before-paimon.json`。中文前端明确使用 `all_zh`，避免自动语言识别触发联网下载；含英文仍走 Kokoro。RTX 5070 Laptop 的 PyTorch 2.7.1+cu128 运算已通过实测。安装脚本使用 `scripts/requirements-paimon.txt` 的独立中文推理依赖，并由 `scripts/prepare_paimon_runtime.py` 修复旧版代码的 jieba、Torch checkpoint 与 librosa 参数兼容问题；HuBERT、RoBERTa、G2PW 与声线文件均校验下载，未使用不必要的 v4 底模。Bridge 全量测试 **56 passed**。
 
@@ -45,12 +48,22 @@ Bridge 已能在本机接收网页文字、按 Hermes / 豆包 PPT 网页分别�
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+# 离线安装 Harness 永久删除插件（仓库已附带，不访问 GitHub）
+powershell -ExecutionPolicy Bypass -File .\scripts\install_dsh_plugin.ps1
 ```
 
-从此目录启动：
+从仓库根目录启动（推荐；会自动固定真实数据目录、检查模型并等待健康检查）：
 
 ```powershell
-.\.venv\Scripts\python.exe -m uvicorn bridge.app.main:app --host 127.0.0.1 --port 8787
+powershell -ExecutionPolicy Bypass -File .\scripts\start_bridge.ps1
+# 改代码/模型/插件后
+powershell -ExecutionPolicy Bypass -File .\scripts\start_bridge.ps1 -Restart
+```
+
+等价的手动命令是：
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn bridge.app.main:app --host 127.0.0.1 --port 8787 --no-access-log
 ```
 
 电脑浏览器打开 `http://127.0.0.1:8787`，从上述本机文件复制访问密钥登录。当前没有手机远程入口，也未启用 Windows 开机自启；等认证、适配器与设备链路完成后，再通过加密私有网络接入，绝不直接映射路由器公网端口。
@@ -70,7 +83,7 @@ Bridge 为以后私有网络访问预留了 `ROBOT_TAILNET_HOST` 环境变量，
 1. **Bridge + 文字网页基础**：本机登录、消息入库、设备发现、每个来源单独历史。当前已完成。
 2. **ESP32 与 Bridge 的真实链路**：版本化 USB CDC 帧、校验、心跳和自动重连；按键按一次收音、再按一次停止，麦克风 PCM 只传到本机。按键和音频上传已实测。
 3. **本地语音链路**：本地 STT、TTS 与喇叭下行已接入。按键录音、中文识别、自动发送 Hermes、自动朗读回复已在实物上连贯测试；扬声器播报已由用户确认清晰且音量合适。播放期间不上传麦克风音频，按键可打断播放并开始收音。唤醒词暂缓，词句由用户以后确定；不使用云语音服务。VAD 尚未接入。
-4. **执行适配器**：Hermes 文字问答已通过本机 Gateway Runs API 接入，默认延续最近的桌面会话，也可在网页上要求新建；中途工具审批可在网页选择仅同意本次或拒绝，也可通过设备按键说“同意审批”或“拒绝审批”。豆包 PPT 网页（入口 `https://www.doubao.com/office/ppt`）标签页复用仍待实现；**网页版 DeepSeek 已按用户要求移除**。
+4. **执行适配器**：Hermes 文字问答已通过本机 Gateway Runs API 接入。Hermes 0.22.1 不允许 API 写入桌面端会话，所以默认续接 Bridge 自己创建的 API 会话（没有就新建），网页上也可显式新建；桌面会话只读查看。中途工具审批可在网页选择仅同意本次或拒绝，也可通过设备按键说“同意审批”或“拒绝审批”。豆包 PPT 网页（入口 `https://www.doubao.com/office/ppt`）标签页复用仍待实现；**网页版 DeepSeek 已按用户要求移除**。
 5. **手机安全访问**：网页只有文字输入；使用加密私有网络和 Bridge 鉴权，无公网开放端口。之后加文件投递、进度和开机自启。
 
 本项目按后续对话修正了 Obsidian 原稿中的 `edge-tts` 云语音、手机语音输入、PTT 长按及唤醒词默认值；以用户最新确认的需求为准。

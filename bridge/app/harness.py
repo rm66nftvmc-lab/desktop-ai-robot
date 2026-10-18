@@ -17,7 +17,7 @@ from threading import RLock
 import yaml
 
 from .hermes import HermesWorker
-from .storage import get_setting
+from .storage import get_setting, deleted_session_ids
 
 BASE = "http://127.0.0.1:3081"
 
@@ -79,6 +79,8 @@ class HarnessClient:
     def start(self):
         if not self.installed:
             return
+        if self._process and self._process.poll() is None:
+            return
         try:
             with socket.create_connection(('127.0.0.1', 3081), timeout=0.3):
                 return
@@ -117,6 +119,7 @@ class HarnessClient:
 
     def rpc(self, method, request=None):
         with self._lock:
+            self.start()
             if self._opener is None:
                 self._login()
             field = '_request' if method == 'session/list' else 'request'
@@ -126,12 +129,15 @@ class HarnessClient:
                 data=json.dumps(body).encode(), headers={
                     'Content-Type': 'application/json', 'Origin': BASE})
             try:
-                with self._opener.open(req, timeout=20) as response:
+                with self._open_authenticated(req) as response:
                     result = json.loads(response.read())['result']
             except urllib.error.HTTPError as exc:
                 if exc.code == 401:
                     self._opener = None
                 raise RuntimeError(f'Harness 本地接口请求失败（HTTP {exc.code}）') from exc
+            except (urllib.error.URLError, TimeoutError, OSError) as exc:
+                self._opener = None
+                raise RuntimeError('Harness 连接中断；本次请求不会自动重发，请核对会话后重试') from exc
             if not result['ok']:
                 error = result.get('error', {})
                 if error.get('code') == 'session/writer-held':
@@ -139,16 +145,30 @@ class HarnessClient:
                 raise RuntimeError(f"Harness {error.get('code', 'error')}: {error.get('message', '')}")
             return result.get('value')
 
+    def _open_authenticated(self, request):
+        # A 401 proves the request was rejected before execution. Refresh the
+        # cookie once; never retry timeouts or ambiguous failed writes.
+        try:
+            return self._opener.open(request, timeout=20)
+        except urllib.error.HTTPError as exc:
+            if exc.code != 401:
+                raise
+            exc.close()
+            self._opener = None
+            self._login()
+            return self._opener.open(request, timeout=20)
+
     def _plugin_post(self, path, payload):
         """POST to an authenticated host plugin route using the Harness cookie."""
         with self._lock:
+            self.start()
             if self._opener is None:
                 self._login()
             req = urllib.request.Request(BASE + path,
                 data=json.dumps(payload).encode(), headers={
                     'Content-Type': 'application/json', 'Origin': BASE})
             try:
-                with self._opener.open(req, timeout=20) as response:
+                with self._open_authenticated(req) as response:
                     envelope = json.loads(response.read())
             except urllib.error.HTTPError as exc:
                 if exc.code == 401:
@@ -159,6 +179,8 @@ class HarnessClient:
                     if exc.code == 404:
                         raise RuntimeError(
                             'Harness 永久删除扩展尚未加载（HTTP 404）；未归档，会话未删除。'
+                            '请运行 scripts\\install_dsh_plugin.ps1 安装仓库内附带的插件，'
+                            '然后重启 Bridge。'
                         ) from exc
                     raise RuntimeError(f'Harness 删除接口请求失败（HTTP {exc.code}）') from exc
             except (urllib.error.URLError, TimeoutError, OSError) as exc:
@@ -221,6 +243,8 @@ class HarnessWorker(HermesWorker):
         self._checked_at = time.monotonic()
         try:
             self._sessions = self.client.rpc('session/list')['items']
+            removed = deleted_session_ids(self.database, self.source)
+            self._sessions = [item for item in self._sessions if item['sessionId'] not in removed]
             self._available = True
         except (OSError, RuntimeError, ValueError, KeyError):
             self._available = False

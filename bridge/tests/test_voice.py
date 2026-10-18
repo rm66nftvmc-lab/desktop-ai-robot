@@ -215,7 +215,7 @@ def test_button_start_invalidates_previous_voice_reply():
     device._handle(Frame(BUTTON, 2, b"\x00"), None, 0)
     device._handle(Frame(BUTTON, 3, b"\x01"), None, 0)
     assert starts == [1, 2]
-    assert captures == []  # No audio was captured in this test.
+    assert captures == [1]  # Empty recording must also end recognition with an error.
 
 
 def test_cancelled_hermes_turn_does_not_publish_late_reply(tmp_path):

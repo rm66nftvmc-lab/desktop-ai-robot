@@ -250,3 +250,18 @@ p { margin: 0; }
   .device-status-row .device-pill { max-width: calc(100% - 70px); padding: 4px 6px; font-size: .6rem; }
   .chat-target-heading .brand-mark.small { width: 30px; height: 30px; border-radius: 9px; font-size: 1rem; }
 }
+
+/* Viewport height follows the visible area when the mobile keyboard opens. */
+.app-shell { height: var(--app-height, 100dvh); }
+.timeline { touch-action: pan-y; overscroll-behavior: contain; }
+.composer-dock { padding-bottom: max(8px, env(safe-area-inset-bottom)); }
+.task-status { max-width: 900px; margin: 0 auto 7px; color: var(--muted); font-size: .78rem; overflow-wrap: anywhere; }
+.task-status[data-state="error"], .task-status[data-state="interrupted"] { color: #ffb3a8; }
+.task-status[data-state="listening"], .task-status[data-state="playing"] { color: #9de4c8; }
+.session-panel .form-error { white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 520px) {
+  input, select, textarea { font-size: 16px; }
+  .composer textarea { min-height: 54px; max-height: min(140px, 25dvh); resize: none; }
+  .composer-dock .playback-status:empty, .composer-dock .form-error:empty { display: none; }
+  .task-status { font-size: .72rem; margin-bottom: 5px; }
+}

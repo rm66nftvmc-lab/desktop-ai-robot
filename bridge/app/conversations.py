@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .storage import get_setting
+from .storage import get_setting, deleted_session_ids
 from .process_utils import command_invocation
 
 
@@ -71,13 +71,20 @@ class Conversations:
                 rows = db.execute("SELECT id,title,last_activity_at FROM sessions "
                     "WHERE COALESCE(archived,0)=0 AND COALESCE(hidden,0)=0 "
                     "AND COALESCE(parent_session_id,'')='' ORDER BY last_activity_at DESC LIMIT 200").fetchall()
-            return [{'id': r[0], 'title': r[1] or '未命名会话', 'updated_at': r[2] or 0} for r in rows]
+            return self._without_deleted(source,
+                [{'id': r[0], 'title': r[1] or '未命名会话', 'updated_at': r[2] or 0} for r in rows])
         values = self.harness.client.rpc('session/list')['items']
-        return [{'id': s['sessionId'],
+        return self._without_deleted(source, [{'id': s['sessionId'],
                  'title': s.get('projections', {}).get('values', {}).get('title') or '未命名会话',
                  'updated_at': (s.get('updatedAt') or 0) / 1000}
                 for s in values if not s.get('projections', {}).get('values', {}).get('subagent')
-                and not s.get('archived')]
+                and not s.get('archived')])
+
+    def _without_deleted(self, source, items):
+        # Host runtime catalogs may retain removed sessions in memory even after
+        # the plugin confirms disk purge. Never resurrect those rows in Bridge.
+        removed = deleted_session_ids(self.database, source)
+        return [item for item in items if item['id'] not in removed]
 
     def catalog(self, source):
         self.check_source(source)
@@ -140,6 +147,9 @@ class Conversations:
                 self.harness.client.delete_session_permanently(native_id)
 
         with sqlite3.connect(self.database) as db:
+            if native_id:
+                db.execute('INSERT OR IGNORE INTO deleted_sessions(source,native_id) VALUES (?,?)',
+                           (source, native_id))
             db.execute('DELETE FROM messages WHERE source=? AND conversation_id=?',
                        (source, conversation))
             db.execute('DELETE FROM conversations WHERE id=? AND source=?',
