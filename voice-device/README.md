@@ -184,3 +184,5 @@ cd D:\Codex工作区\desktop-ai-robot
 `scripts/build_qiuqiu.py` 生成纹理，`src/qiuqiu_motion.h` 计算连续动作，`scripts/render_qiuqiu_preview.py` 生成 [当前表情预览](assets/qiuqiu/expressions-preview.png)。原角色资源不变。球球视觉形象仅限非商业用途，见 [LICENSE 与来源](assets/qiuqiu/README.md)。
 
 1.12 将完成的 RGB565 图像与上一帧按 8×8 小块比较，只传变化块；眼睛、嘴巴移走后露出的底色也会被正确传送，不会先擦屏再画。相同帧不传屏。换主题或颜色测试后会完整重画一次。`ball_bytes`、`dirty_tiles`、`diff_buffer` 分别回报球球像素传送字节数、变化块数和比较缓存是否可用；60 Hz 是动作计算节奏，实际传送次数可能因跳过相同帧而减少。
+
+用户已完成录音、回复实物对照，确认 1.12 差分版不再闪烁；当前以此版作为显示基线。
