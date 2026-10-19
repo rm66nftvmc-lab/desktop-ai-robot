@@ -24,6 +24,7 @@ static std::atomic<bool> internalFrame{false};
 static int face=-1,previousRandom=-1;
 static uint32_t began=0,transition=0,lastTick=0;
 static bool valid=false,backgroundNeeded=true;
+static std::atomic<bool> bootGreeting{false};
 // Diagnostic modes: 1 hold, 2 repeat frozen pixels, 3 compute animation without writes.
 // Normal ANIMATION commands clear this mode; no web control enables it.
 static std::atomic<unsigned> testMode{0};
@@ -167,7 +168,10 @@ static void seek(uint32_t local) {
 static void start(uint32_t id,uint32_t now) {
   memcpy(from,last,N*2);action=id;began=now;transition=now;seek(0);
 }
-static void enter(uint32_t now) {backgroundNeeded=true;face=-1;nextIdle=now+8000+esp_random()%14001;}
+static void enter(uint32_t now,bool greeting=false) {
+  backgroundNeeded=true;face=-1;bootGreeting=greeting;
+  nextIdle=now+8000+esp_random()%14001;
+}
 static int target(int f) {
   if(f==FACE_ID_LISTEN)return 2;
   if(f==FACE_ID_THINK||f==FACE_ID_APPROVE)return 3;
@@ -193,7 +197,12 @@ static void tick(uint32_t now,int current,bool animate,bool force=false) {
   }
   if(current!=face) {
     if(testMode) {testMode=0;animationEnabled=true;}
-    face=current;start(target(current),now);
+    // USB ready/sleep notifications must not cut short the power-on greeting.
+    // Real work and errors interrupt it immediately; the owner task never waits.
+    const bool keepGreeting=bootGreeting&&target(current)==0&&current!=FACE_ID_ERROR;
+    face=current;
+    if(!keepGreeting)bootGreeting=false;
+    if(!keepGreeting||action!=9)start(keepGreeting?9:target(current),now);
     nextIdle=now+8000+esp_random()%14001;
   }
   if(!testMode)testCaptured=false;
@@ -219,7 +228,7 @@ static void tick(uint32_t now,int current,bool animate,bool force=false) {
   if(animate) {
     uint32_t duration=count()*1000/FPS;
     if(now-began>=duration) {
-      if(action>=5) {start(0,now);nextIdle=now+8000+esp_random()%14001;}
+      if(action>=5) {bootGreeting=false;start(0,now);nextIdle=now+8000+esp_random()%14001;}
       else start(action==0&&esp_random()%3==0?1:action==1?0:action.load(),now);
     }
     if(target(face)==0&&action<2&&int32_t(now-nextIdle)>=0) {

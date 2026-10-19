@@ -69,6 +69,7 @@ def test_animation_pause_is_queued_until_connected_without_stopping_audio():
 def test_quiet_playback_pauses_until_device_finishes_and_restores_user_animation():
     from bridge.app.protocol import ANIMATION, FrameParser
     device = DeviceLink()
+    device.set_theme(1)  # Quiet-playback policy belongs to the optional Ball theme.
     device.set_quiet_playback(True)
     device._update(connected=True, playing=False, device_playing=False)
     port = io.BytesIO()

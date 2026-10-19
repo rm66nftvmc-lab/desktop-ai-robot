@@ -2,6 +2,14 @@
 
 Last updated: 2026-10-19
 
+## Autonomous power-on pet greeting (2026-10-19)
+
+- User confirms screen power/ground already connect directly to the controller and requested another visual test, automatic animation at power-on, an opening animation, and Emotion Ball disabled as the default (not deleted).
+- Firmware **1.26** starts directly in DSH Pet with animation enabled and the existing approximately 26.67 MHz pet bus clock. It reuses the attributed upstream **maid curtsy, action 9** as a complete once-only opening greeting, followed by the original crossfade into idle. No new animation asset or storage expansion was needed. Ordinary USB ready/sleep notifications preserve the greeting; listening/thinking/speaking/error interrupt it. Task ownership and non-blocking serial/audio servicing are preserved.
+- Bridge constructor and missing/invalid stored-theme fallback now use DSH Pet. The web selector lists it first and its unknown-state fallback agrees. Explicit valid Emotion Ball selection and persistence still work; its quiet-playback policy is retained. Existing migration and reconnect tests were updated to verify the new default while preserving a manual Ball selection.
+- Build and changed-sector flash hash verification passed, **146 Bridge tests and 11 web tests passed**, plus JavaScript syntax and whitespace checks. Offline boot was verified with Bridge stopped and no host WELCOME/animation command: action 9 advanced through frames 0/81/161/241/322, then the greeting flag cleared and action 0 was selected, with increasing uptime and presents. This is autonomous startup, not host-triggered playback.
+- A separate reset test sent WELCOME/READY during the greeting: at uptime 6.3 seconds the device still displayed action 9/frame 122. Sending LISTEN then produced action 2/frame 118 by the next status, CRC 0, proving work-state priority without blocking the host. The diagnostic sent READY and released serial ownership, then restored Bridge. Authenticated API confirmed **1.26, connected, requested/actual theme 2, animation enabled and no audio playing**; the current stored selection was explicitly set to DSH Pet. Physical cold-start appearance and flicker feedback remain pending; flicker is not claimed fixed by this startup change.
+
 ## Sparse decoded-delta cache (2026-10-19)
 
 - User confirmed 1.24 renders correctly and is smooth, but **flicker persists**, and requested further algorithm optimization. A later question asks whether low voltage causes it. The unchanged-image computation A/B supports a workload-linked symptom, but no supply waveform, ground or BLK measurement has established the electrical cause. Do not describe it as proven undervoltage or conclude that hardware is ruled out.

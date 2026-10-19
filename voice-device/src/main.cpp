@@ -16,16 +16,16 @@ static constexpr uint8_t FRAME_HEARTBEAT=5, FRAME_BUTTON=6, FRAME_ACK=8;
 static constexpr uint8_t FRAME_HELLO=9, FRAME_WELCOME=10, FRAME_AUDIO_END=11, FRAME_FACE=12;
 static constexpr uint8_t FRAME_ANIMATION=13;
 static constexpr uint8_t FRAME_THEME=14, FRAME_SCREEN_TEST=15;
-static std::atomic<uint8_t> displayTheme{1};
+static std::atomic<uint8_t> displayTheme{2};
 static std::atomic<int> pendingTheme{-1};
 static std::atomic<int> pendingFace{-1},pendingColor{-1};
 static bool screenTaskRunning=false;
-static std::atomic<uint32_t> pendingLcdHz{0},lcdBusHz{40000000};
+static std::atomic<uint32_t> pendingLcdHz{0},lcdBusHz{26666666};
 static constexpr uint16_t MAX_PAYLOAD=1024;
 static constexpr int KEY_PIN=1, SAMPLE_RATE=16000;
 static constexpr int LCD_CS=8, LCD_DC=9, LCD_RST=10, LCD_MOSI=11, LCD_SCLK=12;
 static constexpr int LCD_WIDTH=240, LCD_HEIGHT=320;
-static SPISettings lcdSpi(40000000, MSBFIRST, SPI_MODE0);
+static SPISettings lcdSpi(26666666, MSBFIRST, SPI_MODE0);
 static bool micReady=false,speakerReady=false;
 static std::atomic<bool> connected{false},listening{false},playing{false};
 static uint16_t txSequence=0;
@@ -489,6 +489,7 @@ void setup() {
   micReady=startMicrophone();
   speakerReady=startSpeaker();
   lcdInit();
+  pet::enter(millis(),true);
   currentFace=-1;
   lcdApplyFace(micReady&&speakerReady?FACE_ID_BOOT:FACE_ID_ERROR);
   screenTaskRunning=xTaskCreatePinnedToCore(lcdTask,"screen",16384,nullptr,1,nullptr,1)==pdPASS;
@@ -502,7 +503,11 @@ void loop() {
   pollButton();
   if (!connected && millis()-lastHello>=2000) {
     lastHello=millis();
-      sendJson(FRAME_HELLO,"{\"protocol\":1,\"firmware\":\"voice-device-1.25\"}");
+      char hello[256];
+      snprintf(hello,sizeof(hello),"{\"protocol\":1,\"firmware\":\"voice-device-1.26\",\"display_theme\":%u,\"animation_enabled\":%s,\"boot_animation\":%s,\"pet_action\":%lu,\"pet_frame\":%lu,\"presents\":%lu,\"uptime_ms\":%lu}",
+        displayTheme.load(),animationEnabled?"true":"false",pet::bootGreeting?"true":"false",
+        (unsigned long)pet::action.load(),(unsigned long)pet::frame.load(),(unsigned long)lcdPresents.load(),(unsigned long)millis());
+      sendJson(FRAME_HELLO,hello);
   }
   if (connected && millis()-lastStatus>=3000) {
     lastStatus=millis();

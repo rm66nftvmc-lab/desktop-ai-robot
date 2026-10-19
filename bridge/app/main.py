@@ -131,7 +131,7 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
                         audio_output=audio_output, on_disconnect=lambda: voice.on_device_disconnect())
     theme = get_setting(database, 'display_theme')
     if theme not in ('qiuqiu', 'dsh_pet'):
-        theme = 'qiuqiu'
+        theme = 'dsh_pet'
         set_setting(database, 'display_theme', theme)
     device.set_theme(2 if theme == 'dsh_pet' else 1)
     device.set_quiet_playback(selected_voice(data_dir).startswith('cosyvoice'))

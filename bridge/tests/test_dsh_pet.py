@@ -55,6 +55,7 @@ def test_dsh_theme_survives_restart_and_usb_reconnect(tmp_path):
     from bridge.app.main import create_app
     from bridge.app.protocol import Frame, FrameParser, HELLO, THEME
     app = create_app(tmp_path, token='test-access-token')
+    assert app.state.device.snapshot()['desired_theme'] == 2  # Fresh installs default to the pet.
     client = TestClient(app, base_url='http://127.0.0.1')
     client.post('/api/login',json={'token':'test-access-token'})
     assert client.post('/api/device/theme',json={'theme':'dsh_pet'}).status_code == 200

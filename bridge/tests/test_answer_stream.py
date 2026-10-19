@@ -85,8 +85,8 @@ def test_theme_persistence_auth_origin_validation_and_reconnect(tmp_path):
     database = tmp_path / 'messages.sqlite3'
     set_setting(database, 'display_theme', 'original')
     upgraded = create_app(tmp_path, token='test-access-token').state.device
-    assert upgraded.snapshot()['desired_theme'] == 1
-    assert get_setting(database, 'display_theme') == 'qiuqiu'
+    assert upgraded.snapshot()['desired_theme'] == 2
+    assert get_setting(database, 'display_theme') == 'dsh_pet'
 
 
 def test_stop_api_cannot_cancel_a_different_conversation_or_agent(tmp_path):

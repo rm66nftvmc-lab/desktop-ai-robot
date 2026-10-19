@@ -97,10 +97,10 @@ class DeviceLink:
         self._animation_requested = True
         self._animation_sent: bool | None = None
         self._quiet_playback = False
-        self._desired_theme = 1
-        self._pending_theme = 1
+        self._desired_theme = 2
+        self._pending_theme = 2
         self._state['display_theme'] = None
-        self._state['desired_theme'] = 1
+        self._state['desired_theme'] = 2
 
     def set_theme(self, theme: int) -> None:
         if type(theme) is not int or theme not in (1, 2):
