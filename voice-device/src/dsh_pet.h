@@ -17,7 +17,7 @@ static std::atomic<bool> internalFrame{false};
 static int face=-1,previousRandom=-1;
 static uint32_t began=0,transition=0,lastTick=0;
 static bool valid=false,backgroundNeeded=true;
-// Diagnostic-only wire command: 1 = hold without writes; 2 = repeat same image.
+// Diagnostic modes: 1 hold, 2 repeat frozen pixels, 3 compute animation without writes.
 // Normal ANIMATION commands clear this mode; no web control enables it.
 static std::atomic<unsigned> testMode{0};
 static std::atomic<uint32_t> testHash{0};
@@ -146,7 +146,7 @@ static void tick(uint32_t now,int current,bool animate,bool force=false) {
       }
       lcdEndPixels();++lcdPresents;
     }
-    return;
+    if(testMode<=2)return;
   }
   if(!animate&&!force)return;
   if(animate) {
@@ -206,7 +206,7 @@ static void tick(uint32_t now,int current,bool animate,bool force=false) {
       left=min(left,x);right=max(right,x);top=min(top,y);bottom=y;
     }
   }
-  if(right>=left) {
+  if(right>=left&&testMode!=3) {
     // The shared buffer is sized for Emotion Ball (192 square), leaving room
     // after this 168-square image for a packed 16-row internal transfer strip.
     constexpr int ROWS=16;
@@ -222,8 +222,9 @@ static void tick(uint32_t now,int current,bool animate,bool force=false) {
     lcdEndPixels();
   }
 
-  memcpy(last,lcdFrameBytes,N*2);
+  if(testMode!=3)memcpy(last,lcdFrameBytes,N*2);
   lcdPushUs=micros()-pushStarted;
-  ++lcdPresents;++lcdSourceUpdates;
+  if(testMode!=3)++lcdPresents;
+  ++lcdSourceUpdates;
 }
 }

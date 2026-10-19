@@ -378,10 +378,10 @@ static void handleFrame(uint8_t kind,const uint8_t *payload,uint16_t length) {
     lcdDrawFace(listening?FACE_ID_LISTEN:payload[0]);
   } else if (kind==FRAME_THEME && connected && length==1 && payload[0]<=2) {
     pendingTheme=payload[0]==2?2:1;
-  } else if (kind==FRAME_SCREEN_TEST && connected && (length==1||(length==2&&payload[1]<=2)) && payload[0]<=2
+  } else if (kind==FRAME_SCREEN_TEST && connected && (length==1||(length==2&&payload[1]<=2)) && payload[0]<=3
              && displayTheme==2 && !playing && !listening) {
     pendingLcdHz=length==2&&payload[1]==1?20000000:length==2&&payload[1]==2?40000000:26666666;
-    pet::testMode=payload[0];animationEnabled=payload[0]==0;
+    pet::testMode=payload[0];animationEnabled=payload[0]==0||payload[0]==3;
   } else if (kind==FRAME_ANIMATION && connected && length==1) {
     pendingLcdHz=displayTheme==2?26666666:40000000;
     pet::testMode=0;animationEnabled=payload[0]!=0;
@@ -502,7 +502,7 @@ void loop() {
   pollButton();
   if (!connected && millis()-lastHello>=2000) {
     lastHello=millis();
-      sendJson(FRAME_HELLO,"{\"protocol\":1,\"firmware\":\"voice-device-1.22\"}");
+      sendJson(FRAME_HELLO,"{\"protocol\":1,\"firmware\":\"voice-device-1.23\"}");
   }
   if (connected && millis()-lastStatus>=3000) {
     lastStatus=millis();

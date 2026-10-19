@@ -1,6 +1,6 @@
 """Controlled static-screen A/B test. Own COM exclusively; Bridge must be stopped.
 
-Write hold, repeat, motion-normal, motion-slow, motion-fast or stop into --control. Default timeout restores animation.
+Write hold, repeat, compute-only, motion-normal, motion-slow, motion-fast or stop into --control. Default timeout restores animation.
 Status JSONL records only hardware telemetry. Pressing the robot button aborts.
 """
 import argparse
@@ -61,16 +61,18 @@ def main():
                         record = {'phase': phase, **d}
                         log.write(json.dumps(record)+'\n');log.flush()
                         fields = ['uptime_ms','screen_test','screen_test_hash','pixel_writes',
-                                  'pet_frame','display_theme','animation_enabled','bad_crc','lcd_spi_hz','presents']
+                                  'pet_frame','display_theme','animation_enabled','bad_crc','lcd_spi_hz','presents','source_updates','pet_decode_us']
                         print(json.dumps({'phase':phase, **{k:d.get(k) for k in fields}}),flush=True)
-                        if phase in ('hold','repeat') and d.get('screen_test') == {'hold':1,'repeat':2}[phase]:
+                        if phase in ('hold','repeat','compute-only') and d.get('screen_test') == {'hold':1,'repeat':2,'compute-only':3}[phase]:
                             if baseline_hash is None:
                                 baseline_hash = d['screen_test_hash']
                             if d['screen_test_hash'] != baseline_hash:
                                 raise RuntimeError('Frozen image changed; A/B invalid')
                             if prior and prior.get('screen_test') == d['screen_test']:
                                 writes = d['pixel_writes']-prior['pixel_writes']
-                                assert (writes == 0) if phase == 'hold' else (writes > 0)
+                                assert (writes > 0) if phase == 'repeat' else (writes == 0)
+                                if phase=='compute-only':
+                                    assert d['source_updates']>prior['source_updates'], 'Compute workload did not advance'
                                 print('VERIFIED',phase,'pixel write delta',writes,'same image hash',baseline_hash,flush=True)
                             prior = d
                 if not connected:
@@ -81,9 +83,12 @@ def main():
                     send(protocol.HEARTBEAT);heartbeat=now
                 if now >= apply_at:
                     desired = args.control.read_text(encoding='utf-8-sig').strip()
+                    # A writer may briefly truncate the control file before replacing its text.
+                    if not desired:
+                        continue
                     if desired == 'stop':
                         break
-                    modes={'hold':(1,0),'repeat':(2,0),'motion-normal':(0,0),'motion-slow':(0,1),'motion-fast':(0,2)}
+                    modes={'hold':(1,0),'repeat':(2,0),'compute-only':(3,0),'motion-normal':(0,0),'motion-slow':(0,1),'motion-fast':(0,2)}
                     if desired not in modes:
                         raise RuntimeError('Unknown display test phase')
                     if desired != phase:
