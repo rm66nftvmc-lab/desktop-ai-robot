@@ -1,6 +1,6 @@
 """Controlled static-screen A/B test. Own COM exclusively; Bridge must be stopped.
 
-Write hold, repeat, or stop into --control. Default timeout restores animation.
+Write hold, repeat, motion-normal, motion-slow, motion-fast or stop into --control. Default timeout restores animation.
 Status JSONL records only hardware telemetry. Pressing the robot button aborts.
 """
 import argparse
@@ -61,7 +61,7 @@ def main():
                         record = {'phase': phase, **d}
                         log.write(json.dumps(record)+'\n');log.flush()
                         fields = ['uptime_ms','screen_test','screen_test_hash','pixel_writes',
-                                  'pet_frame','display_theme','animation_enabled','bad_crc']
+                                  'pet_frame','display_theme','animation_enabled','bad_crc','lcd_spi_hz','presents']
                         print(json.dumps({'phase':phase, **{k:d.get(k) for k in fields}}),flush=True)
                         if phase in ('hold','repeat') and d.get('screen_test') == {'hold':1,'repeat':2}[phase]:
                             if baseline_hash is None:
@@ -83,10 +83,11 @@ def main():
                     desired = args.control.read_text(encoding='utf-8-sig').strip()
                     if desired == 'stop':
                         break
-                    if desired not in ('hold','repeat'):
-                        raise RuntimeError('Control must be hold, repeat, or stop')
+                    modes={'hold':(1,0),'repeat':(2,0),'motion-normal':(0,0),'motion-slow':(0,1),'motion-fast':(0,2)}
+                    if desired not in modes:
+                        raise RuntimeError('Unknown display test phase')
                     if desired != phase:
-                        send(protocol.SCREEN_TEST, bytes([1 if desired == 'hold' else 2]))
+                        send(protocol.SCREEN_TEST, bytes(modes[desired]))
                         phase=desired;prior=None
                         print('REQUESTED',phase,flush=True)
     finally:

@@ -20,6 +20,7 @@ static std::atomic<uint8_t> displayTheme{1};
 static std::atomic<int> pendingTheme{-1};
 static std::atomic<int> pendingFace{-1},pendingColor{-1};
 static bool screenTaskRunning=false;
+static std::atomic<uint32_t> pendingLcdHz{0},lcdBusHz{40000000};
 static constexpr uint16_t MAX_PAYLOAD=1024;
 static constexpr int KEY_PIN=1, SAMPLE_RATE=16000;
 static constexpr int LCD_CS=8, LCD_DC=9, LCD_RST=10, LCD_MOSI=11, LCD_SCLK=12;
@@ -285,13 +286,16 @@ static void lcdService() {
   if(theme>=1 && theme<=2 && theme!=displayTheme) {
     // Longer jumper-wire display bus: use a conservative pet write clock.
     // Emotion Ball keeps its previously validated 40 MHz setting.
-    lcdSpi=SPISettings(theme==2?26666666:40000000,MSBFIRST,SPI_MODE0);
+    lcdBusHz=theme==2?26666666:40000000;
+    lcdSpi=SPISettings(lcdBusHz.load(),MSBFIRST,SPI_MODE0);
     const uint8_t scan=0x0F; // Restore default panel timing after dim high-scan trials.
     lcdCommand(0xC6,&scan,1);
     displayTheme=theme;
     if(theme==2)pet::enter(millis());
     else {lcdFill(0x0843);qiuqiuNeedsFull=true;qiuqiuPreviousValid=false;lcdDrawQiuqiu();}
   }
+  uint32_t clock=pendingLcdHz.exchange(0);
+  if(clock) {lcdBusHz=clock;lcdSpi=SPISettings(clock,MSBFIRST,SPI_MODE0);}
   int face=pendingFace.exchange(-1);
   if(face>=0) lcdApplyFace(face);
   int color=pendingColor.exchange(-1);
@@ -374,10 +378,12 @@ static void handleFrame(uint8_t kind,const uint8_t *payload,uint16_t length) {
     lcdDrawFace(listening?FACE_ID_LISTEN:payload[0]);
   } else if (kind==FRAME_THEME && connected && length==1 && payload[0]<=2) {
     pendingTheme=payload[0]==2?2:1;
-  } else if (kind==FRAME_SCREEN_TEST && connected && length==1 && payload[0]<=2
+  } else if (kind==FRAME_SCREEN_TEST && connected && (length==1||(length==2&&payload[1]<=2)) && payload[0]<=2
              && displayTheme==2 && !playing && !listening) {
+    pendingLcdHz=length==2&&payload[1]==1?20000000:length==2&&payload[1]==2?40000000:26666666;
     pet::testMode=payload[0];animationEnabled=payload[0]==0;
   } else if (kind==FRAME_ANIMATION && connected && length==1) {
+    pendingLcdHz=displayTheme==2?26666666:40000000;
     pet::testMode=0;animationEnabled=payload[0]!=0;
   } else if (kind==FRAME_HEARTBEAT && connected) {
     lastHost=millis();
@@ -496,7 +502,7 @@ void loop() {
   pollButton();
   if (!connected && millis()-lastHello>=2000) {
     lastHello=millis();
-      sendJson(FRAME_HELLO,"{\"protocol\":1,\"firmware\":\"voice-device-1.21\"}");
+      sendJson(FRAME_HELLO,"{\"protocol\":1,\"firmware\":\"voice-device-1.22\"}");
   }
   if (connected && millis()-lastStatus>=3000) {
     lastStatus=millis();
@@ -509,8 +515,8 @@ void loop() {
       static_cast<unsigned long>(lcdComposeUs),static_cast<unsigned long>(lcdPushUs),animationEnabled?"true":"false",
       static_cast<unsigned long>(lcdPresents),static_cast<unsigned long>(lcdSourceUpdates),lcdCachedFrames,displayTheme.load(),static_cast<unsigned long>(qiuqiuPixelBytes.load()),qiuqiuDirtyTiles.load(),qiuqiuPrevious?"true":"false");
     size_t used=strlen(status);
-    snprintf(status+used-1,sizeof(status)-used+1,",\"pet_action\":%lu,\"pet_frame\":%lu,\"pet_random_count\":%lu,\"pet_decode_errors\":%lu,\"pet_decode_us\":%lu,\"pet_color_us\":%lu,\"pet_blend_us\":%lu,\"pet_internal_frames\":%u,\"screen_test\":%u,\"screen_test_hash\":%lu,\"pixel_writes\":%lu}",
-      (unsigned long)pet::action.load(),(unsigned long)pet::frame.load(),(unsigned long)pet::randomCount.load(),(unsigned long)pet::decodeErrors.load(),(unsigned long)pet::decodeUs.load(),(unsigned long)pet::colorUs.load(),(unsigned long)pet::blendUs.load(),pet::internalFrame.load()?1u:0u,pet::testMode.load(),(unsigned long)pet::testHash.load(),(unsigned long)lcdPixelWrites.load());
+    snprintf(status+used-1,sizeof(status)-used+1,",\"pet_action\":%lu,\"pet_frame\":%lu,\"pet_random_count\":%lu,\"pet_decode_errors\":%lu,\"pet_decode_us\":%lu,\"pet_color_us\":%lu,\"pet_blend_us\":%lu,\"pet_internal_frames\":%u,\"screen_test\":%u,\"screen_test_hash\":%lu,\"pixel_writes\":%lu,\"lcd_spi_hz\":%lu}",
+      (unsigned long)pet::action.load(),(unsigned long)pet::frame.load(),(unsigned long)pet::randomCount.load(),(unsigned long)pet::decodeErrors.load(),(unsigned long)pet::decodeUs.load(),(unsigned long)pet::colorUs.load(),(unsigned long)pet::blendUs.load(),pet::internalFrame.load()?1u:0u,pet::testMode.load(),(unsigned long)pet::testHash.load(),(unsigned long)lcdPixelWrites.load(),(unsigned long)lcdBusHz.load());
     sendJson(FRAME_STATUS,status);
   }
   pollMicrophone();
