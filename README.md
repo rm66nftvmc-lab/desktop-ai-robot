@@ -7,7 +7,7 @@ Emotion Ball 保留，新增可切换的蓝发小女仆动画：录音、思考�
 素材来自 [PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet)，固定提交 `c6f96350d9307bd6c23bc6ea31974e76a719a8b6`。上游代码 MIT；动画素材许可另行限制为非商业使用并要求来源署名，见 [素材声明](voice-device/assets/dsh_pet/NOTICE.md)。
 
 
-当前工作状态与后续事项见 [PROJECT_STATUS.md](PROJECT_STATUS.md)；新机器部署、数据目录恢复和排错见 [docs/SETUP.md](docs/SETUP.md)。
+当前工作状态与后续事项见 [PROJECT_STATUS.md](PROJECT_STATUS.md)；新机器部署、数据目录恢复和排错见 [docs/SETUP.md](docs/SETUP.md)。屏幕闪烁的已测结果与无仪表排查方案见 [docs/SCREEN_FLICKER_NO_TOOLS.md](docs/SCREEN_FLICKER_NO_TOOLS.md)。
 
 **2026-10-19 · 固件 1.13 / Bridge 0.3.0**：固件只保留 Emotion Ball（球球），已移除鲸鱼娘的位图、解压器和动画帧缓存；设备开机直接显示球球，保持 60 Hz 动作与差分刷新。旧主题选择自动迁移到球球，网页移除“原角色”选项。球球视觉参考 sam70361/aora-bot，仅供个人非商业学习使用，详见 [素材许可说明](voice-device/assets/qiuqiu/README.md)。
 

@@ -2,6 +2,13 @@
 
 Last updated: 2026-10-19
 
+## Handoff snapshot and standalone USB-supply test (2026-10-19)
+
+- User has no multimeter or capacitors and requested further no-instrument methods plus a GitHub checkpoint. They confirmed a compatible household USB charger was available and were instructed to move the existing controller USB cable from the computer to that charger, without changing screen or other wiring. Firmware 1.26 supports autonomous opening/idle playback without Bridge.
+- User reports **the household USB supply still does not solve the flicker**. They did not quantify the difference, so do not claim severity was exactly equal. This test also removes the computer USB data connection; it does not prove every power/ground/backlight path is healthy or identify a specific fault. Bridge cannot communicate with the device while its USB cable is on the charger; that is expected, not a software regression.
+- Added [docs/SCREEN_FLICKER_NO_TOOLS.md](docs/SCREEN_FLICKER_NO_TOOLS.md) with the evidence ledger, limitations, and proposed internal-workload/PSRAM-workload diagnostics, layout and video comparisons. Newly proposed workload diagnostics are **not implemented in 1.26**. No further firmware or wiring change was made for this handoff. Autonomous startup remains accepted; flicker remains unresolved.
+- Latest validated source/firmware baseline remains 1.26: 146 Bridge tests and 11 web tests, successful build/flash verification, offline opening-to-idle verification and work-state priority verification. Preserve DSH Pet default and automatic animation; Emotion Ball remains selectable. No audio changes in this checkpoint.
+
 ## Autonomous power-on pet greeting (2026-10-19)
 
 - User confirms screen power/ground already connect directly to the controller and requested another visual test, automatic animation at power-on, an opening animation, and Emotion Ball disabled as the default (not deleted).
