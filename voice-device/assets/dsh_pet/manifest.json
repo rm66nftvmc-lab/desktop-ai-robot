@@ -1,0 +1,129 @@
+{
+  "source": "https://github.com/PC2005-cloud/dsh-pet",
+  "revision": "c6f96350d9307bd6c23bc6ea31974e76a719a8b6",
+  "fps": 24,
+  "size": 192,
+  "interpolation": "on-device intermediate RGB565 blend at 48 Hz; source duration retained",
+  "random_actions": [
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12
+  ],
+  "idle_gap_ms": [
+    8000,
+    22000
+  ],
+  "clips": [
+    {
+      "name": "待机呼吸休闲",
+      "path": "dsh-pet/assets/webm/待机呼吸休闲.webm",
+      "git_blob": "fd64a428a2be1d3b4ff6cd7f9867dfe978ba0bbb",
+      "first": 0,
+      "frames": 241,
+      "seconds": 10.041666666666666
+    },
+    {
+      "name": "东张西望",
+      "path": "dsh-pet/assets/webm/东张西望.webm",
+      "git_blob": "3ba4edb2cc647c51edd41b5a6c71eeee8c418ed0",
+      "first": 241,
+      "frames": 241,
+      "seconds": 10.041666666666666
+    },
+    {
+      "name": "轻快记录",
+      "path": "dsh-pet/assets/webm/轻快记录.webm",
+      "git_blob": "d0c1bc670b74450e53019b36366edbe54056a363",
+      "first": 482,
+      "frames": 241,
+      "seconds": 10.041666666666666
+    },
+    {
+      "name": "工作状态-思考冒泡",
+      "path": "dsh-pet/assets/webm/工作状态-思考冒泡.webm",
+      "git_blob": "51bc3bb2fb894e6f1499974d62a3d93592f91859",
+      "first": 723,
+      "frames": 241,
+      "seconds": 10.041666666666666
+    },
+    {
+      "name": "碎碎念-对屏碎碎念",
+      "path": "dsh-pet/assets/webm/碎碎念-对屏碎碎念.webm",
+      "git_blob": "8b7b357f01a9e5cf733dce28f32e8f94be4a030d",
+      "first": 964,
+      "frames": 241,
+      "seconds": 10.041666666666666
+    },
+    {
+      "name": "原地专心玩魔方",
+      "path": "dsh-pet/assets/webm/原地专心玩魔方.webm",
+      "git_blob": "d2730f4c17e8ccb793973929c237b4fb32d8e3fc",
+      "first": 1205,
+      "frames": 241,
+      "seconds": 10.041666666666666
+    },
+    {
+      "name": "撸猫",
+      "path": "dsh-pet/assets/webm/撸猫.webm",
+      "git_blob": "466044675ea20b863db850373aab8a6c2b7c11a8",
+      "first": 1446,
+      "frames": 241,
+      "seconds": 10.041666666666666
+    },
+    {
+      "name": "吹气球",
+      "path": "dsh-pet/assets/webm/吹气球.webm",
+      "git_blob": "3a632cd91c409ed1b889f0313ae1394113c0d7c0",
+      "first": 1687,
+      "frames": 241,
+      "seconds": 10.041666666666666
+    },
+    {
+      "name": "三球抛接",
+      "path": "dsh-pet/assets/webm/三球抛接.webm",
+      "git_blob": "a76228cb5f42fa159e3ec565b8ef969a7d289dca",
+      "first": 1928,
+      "frames": 241,
+      "seconds": 10.041666666666666
+    },
+    {
+      "name": "女仆屈膝礼仪",
+      "path": "dsh-pet/assets/webm/女仆屈膝礼仪.webm",
+      "git_blob": "0bcac6ada85e78527fcce020db73bf0b6eff41d3",
+      "first": 2169,
+      "frames": 241,
+      "seconds": 10.041666666666666
+    },
+    {
+      "name": "点击回应-开心跃动",
+      "path": "dsh-pet/assets/webm/点击回应-开心跃动.webm",
+      "git_blob": "fb614abf8d19c650fb5bd4727b2585282733a996",
+      "first": 2410,
+      "frames": 241,
+      "seconds": 10.041666666666666
+    },
+    {
+      "name": "打瞌睡被惊醒",
+      "path": "dsh-pet/assets/webm/打瞌睡被惊醒.webm",
+      "git_blob": "e5c5759895274e1f7c4017dce9c9c51beec44e51",
+      "first": 2651,
+      "frames": 241,
+      "seconds": 10.041666666666666
+    },
+    {
+      "name": "鲸鱼吐泡泡特效",
+      "path": "dsh-pet/assets/webm/鲸鱼吐泡泡特效.webm",
+      "git_blob": "4848e28f2c4fde323025a03a7980b75f1c56f98e",
+      "first": 2892,
+      "frames": 241,
+      "seconds": 10.041666666666666
+    }
+  ],
+  "sha256": "8cb720003d112a63d7e36cc28f8d5b1ae7bd2d7378d87f40d32aab800763dc2f",
+  "bytes": 10893800
+}

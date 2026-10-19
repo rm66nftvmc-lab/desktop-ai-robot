@@ -16,7 +16,8 @@ static constexpr uint8_t FRAME_HEARTBEAT=5, FRAME_BUTTON=6, FRAME_ACK=8;
 static constexpr uint8_t FRAME_HELLO=9, FRAME_WELCOME=10, FRAME_AUDIO_END=11, FRAME_FACE=12;
 static constexpr uint8_t FRAME_ANIMATION=13;
 static constexpr uint8_t FRAME_THEME=14;
-static constexpr uint8_t displayTheme=1; // Emotion Ball is the only installed display.
+static std::atomic<uint8_t> displayTheme{1};
+static std::atomic<int> pendingTheme{-1};
 static std::atomic<int> pendingFace{-1},pendingColor{-1};
 static bool screenTaskRunning=false;
 static constexpr uint16_t MAX_PAYLOAD=1024;
@@ -253,14 +254,17 @@ static void lcdDrawQiuqiu() {
   qiuqiuNeedsFull=false;
 }
 
+#include "dsh_pet.h"
+
 static void lcdApplyFace(int index) {
   if (index<0 || index>=FACE_COUNT || index==currentFace) return;
   currentFace=index;
   currentFaceFrame=0;
-  lcdDrawQiuqiu();
+  if(displayTheme==2) pet::tick(millis(),index,animationEnabled,true); else lcdDrawQiuqiu();
 }
 
 static void lcdTickAnimation() {
+  if(displayTheme==2) {pet::tick(millis(),currentFace,animationEnabled);return;}
   static uint32_t lastQiuqiuUs=0;
   const uint32_t now=micros(),passed=now-lastQiuqiuUs;
   if (!animationEnabled) {lastQiuqiuUs=now;return;}
@@ -273,9 +277,15 @@ static void lcdDrawFace(int index) {
   if(index>=0 && index<FACE_COUNT) pendingFace.store(index);
 }
 
-// SPI and Emotion Ball pixel composition have exactly one owner. Audio I2S
-// writes on the Arduino core cannot block this task's display cadence.
+// SPI and all composition have one owner. Keep this task on the USB/I2S
+// core: the cross-core PSRAM composition path reset the device during audio.
 static void lcdService() {
+  int theme=pendingTheme.exchange(-1);
+  if(theme>=1 && theme<=2 && theme!=displayTheme) {
+    displayTheme=theme;
+    if(theme==2)pet::enter(millis());
+    else {lcdFill(0x0843);qiuqiuNeedsFull=true;qiuqiuPreviousValid=false;lcdDrawQiuqiu();}
+  }
   int face=pendingFace.exchange(-1);
   if(face>=0) lcdApplyFace(face);
   int color=pendingColor.exchange(-1);
@@ -356,8 +366,8 @@ static void handleFrame(uint8_t kind,const uint8_t *payload,uint16_t length) {
     connected=true; lastHost=millis(); lcdDrawFace(FACE_ID_READY);
   } else if (kind==FRAME_FACE && connected && length==1) {
     lcdDrawFace(listening?FACE_ID_LISTEN:payload[0]);
-  } else if (kind==FRAME_THEME && connected && length==1 && payload[0]<=1) {
-    /* Legacy 0/1 requests both retain Emotion Ball. */
+  } else if (kind==FRAME_THEME && connected && length==1 && payload[0]<=2) {
+    pendingTheme=payload[0]==2?2:1;
   } else if (kind==FRAME_ANIMATION && connected && length==1) {
     animationEnabled=payload[0]!=0;
   } else if (kind==FRAME_HEARTBEAT && connected) {
@@ -466,7 +476,7 @@ void setup() {
   lcdInit();
   currentFace=-1;
   lcdApplyFace(micReady&&speakerReady?FACE_ID_BOOT:FACE_ID_ERROR);
-  screenTaskRunning=xTaskCreatePinnedToCore(lcdTask,"screen",6144,nullptr,1,nullptr,0)==pdPASS;
+  screenTaskRunning=xTaskCreatePinnedToCore(lcdTask,"screen",16384,nullptr,1,nullptr,1)==pdPASS;
 }
 
 void loop() {
@@ -477,7 +487,7 @@ void loop() {
   pollButton();
   if (!connected && millis()-lastHello>=2000) {
     lastHello=millis();
-      sendJson(FRAME_HELLO,"{\"protocol\":1,\"firmware\":\"voice-device-1.13\"}");
+      sendJson(FRAME_HELLO,"{\"protocol\":1,\"firmware\":\"voice-device-1.14\"}");
   }
   if (connected && millis()-lastStatus>=3000) {
     lastStatus=millis();
@@ -488,9 +498,15 @@ void loop() {
       static_cast<unsigned long>(sentAcks),static_cast<unsigned long>(badCrc),
       static_cast<int>(esp_reset_reason()),lcdFrameBytes?"true":"false",
       static_cast<unsigned long>(lcdComposeUs),static_cast<unsigned long>(lcdPushUs),animationEnabled?"true":"false",
-      static_cast<unsigned long>(lcdPresents),static_cast<unsigned long>(lcdSourceUpdates),lcdCachedFrames,displayTheme,static_cast<unsigned long>(qiuqiuPixelBytes.load()),qiuqiuDirtyTiles.load(),qiuqiuPrevious?"true":"false");
+      static_cast<unsigned long>(lcdPresents),static_cast<unsigned long>(lcdSourceUpdates),lcdCachedFrames,displayTheme.load(),static_cast<unsigned long>(qiuqiuPixelBytes.load()),qiuqiuDirtyTiles.load(),qiuqiuPrevious?"true":"false");
+    size_t used=strlen(status);
+    snprintf(status+used-1,sizeof(status)-used+1,",\"pet_action\":%lu,\"pet_frame\":%lu,\"pet_random_count\":%lu,\"pet_decode_errors\":%lu}",
+      (unsigned long)pet::action.load(),(unsigned long)pet::frame.load(),(unsigned long)pet::randomCount.load(),(unsigned long)pet::decodeErrors.load());
     sendJson(FRAME_STATUS,status);
   }
   pollMicrophone();
   if(!screenTaskRunning) lcdService();
+  // Yield idle polling time to the display task on this core. Audio RX/ACK
+  // and microphone DMA remain serviced at millisecond cadence.
+  delay(1);
 }

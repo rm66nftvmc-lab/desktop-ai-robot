@@ -2,6 +2,18 @@
 
 Last updated: 2026-10-19
 
+## DSH Pet animation theme (2026-10-19)
+
+- Firmware 1.14 adds theme 2, `dsh_pet`, from pinned PC2005-cloud/dsh-pet sources; Emotion Ball remains theme 1. The removed old whale-girl atlas remains absent.
+- Thirteen full 241-frame source clips (24 fps) fit a 10.36 MiB compressed indexed-color pack. A fixed dusk background, on-device intermediate RGB565 blending, 220 ms state crossfades and final-only changed-tile output avoid empty frames. No per-frame transfers from the computer.
+- LISTEN → note-taking, THINK/APPROVE → thought bubbles, SPEAK → talking. Eight additional fun clips are selected randomly only while idle, without immediate repeats. Next trigger waits 8–22 seconds after the previous fun action ends; busy states interrupt and reset the idle schedule.
+- Bridge display menu switches/persists both themes and restores selection after USB reconnect. DSH Pet keeps animation during CosyVoice playback; Emotion Ball retains its tested quiet-screen playback policy. Audio gain is unchanged.
+- Full binary/delta validation and theme reconnect/audio-policy tests added: 146 Python + 11 Node tests pass. Build succeeds at approximately 11.42 MB / 15,663,104 bytes; 16 MB physical Flash is required. Material restrictions/attribution are in the asset NOTICE and README; original videos stay outside Git.
+- Hardware 100-second state/idle test passed: LISTEN/THINK/SPEAK map to clips 2/3/4, three random actions occurred, uptime increased continuously, CRC and decode errors stayed zero. Actual presentation is approximately 27 fps idle / 22 fps during speech with current full-body art; 50 Hz is a scheduling target, not a claimed measured rate. Rendering copies PSRAM rows into internal buffers before blending; contiguous row transposition and internal inflate output reduce external-memory work. Missed source frames advance through only the missing deltas, avoiding a keyframe-replay slowdown.
+- User observed whole-background flashing. Reproduction found a separate Bridge reset loop: opening a port with default DTR/RTS and lowering them afterward resets USB-UART ESP32-S3; a heartbeat write during boot times out, reopens and resets again. Control lines now configure before open, with a three-second first-heartbeat grace while reading HELLO. Two regression tests cover line ordering and cold-boot write suppression. Live Bridge subsequently connected with both themes set to 2 and stable uptime. User then confirmed **background no longer flashes**.
+- Audio concurrency regression was reproduced with low-amplitude PCM: the cross-core display path reset during USB/I2S playback, while Emotion Ball succeeded. Pinning the single-owner display task to the USB/I2S core and yielding idle polling time fixed reproduction. Two subsequent approximately ten-second runs each acknowledged **320/320** audio frames with speaking clip 4 and animation enabled, CRC 0 and continuous uptime. A final real CosyVoice sentence through Bridge acknowledged **122/122** frames with animated speaking and no connection loss.
+- Latest physical button recording → AI → animated reply test has been requested; user observation is pending. The background flicker confirmation is separate from this final full-loop check.
+
 ## Emotion Ball only firmware (2026-10-19)
 
 - User requested removal of the first downloaded whale-girl character from firmware. `voice-device-1.13` removes its compiled bitmap/compressed-frame header, decoder, background renderer and 7,372,800-byte pose cache. `faces.h` now contains only the eight stable state protocol IDs; Emotion Ball texture, continuous motion, transitions and changed-tile rendering remain.

@@ -15,6 +15,21 @@ from . import faces, protocol
 from .audio_output import AudioOutput
 
 
+def open_device_port(name: str):
+    """Set reset-sensitive control lines before opening the ESP32 USB port."""
+    port = serial.Serial(port=None, baudrate=115200, timeout=0.005,
+                         write_timeout=0.5, dsrdtr=False)
+    port.dtr = False
+    port.rts = False
+    port.port = name
+    try:
+        port.open()
+    except Exception:
+        port.close()
+        raise
+    return port
+
+
 def find_port() -> str | None:
     for port in list_ports.comports():
         if port.vid == 0x303A:
@@ -88,7 +103,7 @@ class DeviceLink:
         self._state['desired_theme'] = 1
 
     def set_theme(self, theme: int) -> None:
-        if type(theme) is not int or theme != 1:
+        if type(theme) is not int or theme not in (1, 2):
             raise ValueError('Unknown display theme')
         with self._lock:
             self._desired_theme = self._pending_theme = theme
@@ -150,7 +165,7 @@ class DeviceLink:
             if not self._state["connected"]:
                 return sequence
             speaking = self._state['playing'] or self._state['device_playing']
-            enabled = self._animation_requested and not (self._quiet_playback and speaking)
+            enabled = self._animation_requested and not (self._quiet_playback and self._desired_theme == 1 and speaking)
             if enabled == self._animation_sent and self._pending_animation is None:
                 return sequence
             self._pending_animation = None
@@ -300,6 +315,8 @@ class DeviceLink:
                 screen_source_updates=status.get("source_updates"),
                 screen_cached_frames=status.get("cached_frames"),
                 display_theme=status.get('display_theme'),
+                pet_action=status.get('pet_action'), pet_frame=status.get('pet_frame'),
+                pet_random_count=status.get('pet_random_count'), pet_decode_errors=status.get('pet_decode_errors'),
                 screen_ball_bytes=status.get('ball_bytes'),
                 screen_dirty_tiles=status.get('dirty_tiles'),
                 screen_diff_buffer=status.get('diff_buffer'),
@@ -356,12 +373,13 @@ class DeviceLink:
                 self._stop.wait(1)
                 continue
             try:
-                with serial.Serial(name, 115200, timeout=0.005, write_timeout=0.5, dsrdtr=False) as port:
-                    port.dtr = False
-                    port.rts = False
+                with open_device_port(name) as port:
                     parser = protocol.FrameParser()
                     sequence = 0
-                    next_heartbeat = 0.0
+                    # Some USB drivers reset the chip even with preconfigured
+                    # control lines. Read HELLO during boot; an early write can
+                    # time out and create an endless reopen/reset loop.
+                    next_heartbeat = time.monotonic() + 3.0
                     in_flight = 0
                     playback_active = False
                     last_ack = 0.0

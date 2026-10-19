@@ -6,6 +6,41 @@ from bridge.app.device import DeviceLink
 from bridge.app.protocol import AUDIO_UP, BUTTON, Frame
 
 
+def test_usb_reset_lines_are_configured_before_open(monkeypatch):
+    from bridge.app import device as module
+    events = []
+    class Port:
+        def __init__(self, **kwargs):
+            assert kwargs['port'] is None
+        def __setattr__(self, key, value):
+            events.append((key, value))
+        def open(self):
+            events.append(('open', None))
+        def close(self):
+            events.append(('close', None))
+    monkeypatch.setattr(module.serial, 'Serial', Port)
+    module.open_device_port('COM9')
+    assert events == [('dtr',False),('rts',False),('port','COM9'),('open',None)]
+
+
+def test_cold_boot_reads_before_first_heartbeat_write(monkeypatch):
+    from bridge.app import device as module
+    device = DeviceLink()
+    writes = []
+    class Port:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def write(self, value): writes.append(value)
+        def read(self, count):
+            device._stop.set()
+            return b''
+    monkeypatch.setattr(module, 'find_port', lambda:'COM9')
+    monkeypatch.setattr(module, 'open_device_port', lambda name:Port())
+    monkeypatch.setattr(module.time, 'monotonic', lambda:0)
+    device._run()
+    assert writes == []  # The MCU can finish booting without a write-timeout reset loop.
+
+
 def test_changed_pixel_diagnostics_report_actual_device_counters():
     from bridge.app.protocol import STATUS
     device=DeviceLink()
