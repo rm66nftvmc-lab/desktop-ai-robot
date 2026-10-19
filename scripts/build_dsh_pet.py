@@ -1,6 +1,6 @@
 """Build pinned, attributed DSH pet clips for offline ESP32 playback.
 
-Requires FFmpeg with libvpx, Pillow and numpy. Originals stay outside Git.
+Requires FFmpeg with libvpx, Pillow, numpy and OpenCV. Originals stay outside Git.
 """
 import argparse
 import hashlib
@@ -13,6 +13,7 @@ import urllib.parse
 import urllib.request
 import zlib
 
+import cv2
 import numpy as np
 from PIL import Image, ImageDraw
 
@@ -22,7 +23,8 @@ SOURCE = 'https://github.com/PC2005-cloud/dsh-pet'
 NAMES = ['待机呼吸休闲', '东张西望', '轻快记录', '工作状态-思考冒泡',
          '碎碎念-对屏碎碎念', '原地专心玩魔方', '撸猫', '吹气球', '三球抛接',
          '女仆屈膝礼仪', '点击回应-开心跃动', '打瞌睡被惊醒', '鲸鱼吐泡泡特效']
-SIZE = 192
+SIZE = 168
+FPS = 40
 
 
 def background():
@@ -44,12 +46,31 @@ def background():
 
 def decode(path):
     raw = subprocess.check_output(['ffmpeg', '-v', 'error', '-c:v', 'libvpx-vp9',
-        '-i', str(path), '-vf', 'format=rgba,pad=640:400:0:0:color=black@0,crop=352:352:144:24,scale=192:192:flags=lanczos',
+        '-i', str(path), '-vf', f'format=rgba,pad=640:400:0:0:color=black@0,crop=320:320:160:24,scale={SIZE}:{SIZE}:flags=lanczos',
         '-f', 'rawvideo', '-pix_fmt', 'rgba', '-'])
     return np.frombuffer(raw, np.uint8).reshape(-1, SIZE, SIZE, 4).copy()
 
 
+def intermediate(a, b, flow, fraction):
+    ga = cv2.cvtColor(a, cv2.COLOR_RGBA2GRAY)
+    gb = cv2.cvtColor(b, cv2.COLOR_RGBA2GRAY)
+    forward = flow.calc(ga, gb, None)
+    backward = flow.calc(gb, ga, None)
+    yy, xx = np.mgrid[:SIZE, :SIZE].astype(np.float32)
+    def warp(im, motion, fraction):
+        premult = im.astype(np.float32)/255
+        premult[:, :, :3] *= premult[:, :, 3:4]
+        return cv2.remap(premult, xx-motion[:, :, 0]*fraction,
+                         yy-motion[:, :, 1]*fraction, cv2.INTER_LINEAR,
+                         borderMode=cv2.BORDER_CONSTANT)
+    result = warp(a, forward, fraction)*(1-fraction)+warp(b, backward, 1-fraction)*fraction
+    result[:, :, :3] /= np.maximum(result[:, :, 3:4], 1e-5)
+    return np.rint(np.clip(result, 0, 1)*255).astype(np.uint8)
+
+
 def build(cache, out):
+    cv2.setNumThreads(2)
+    flow = cv2.DISOpticalFlow_create(cv2.DISOPTICAL_FLOW_PRESET_MEDIUM)
     cache.mkdir(parents=True, exist_ok=True)
     out.mkdir(parents=True, exist_ok=True)
     if not (cache/'tree.json').exists():
@@ -70,54 +91,59 @@ def build(cache, out):
         assert digest == blobs[relative]['sha'], name
         source_meta.append({'name': name, 'path': relative, 'git_blob': digest})
     bg = background()
-    bg.save(out/'background.png')
-    crop = bg.crop((64, 24, 256, 216))
+    crop = bg.crop((76, 36, 244, 204))
     def compose(frame):
         return Image.alpha_composite(crop.convert('RGBA'), Image.fromarray(frame)).convert('RGB')
     samples = []
     for name in NAMES:
-        npy = cache/f'{name}.npy'
+        npy = cache/f'{name}.{SIZE}.npy'
         if not npy.exists():
             np.save(npy, decode(cache/f'{name}.webm'))
         frames = np.load(npy, mmap_mode='r')
         samples.extend(np.asarray(compose(f))[::4, ::4] for f in frames[::24])
     palette = Image.fromarray(np.concatenate(samples, axis=0)).quantize(64)
     colors = np.pad(np.array(palette.getpalette(), np.uint8), (0, 768-len(palette.getpalette()))).reshape(256, 3).astype(np.uint16)
+    colors = np.rint(255*(colors.astype(np.float32)/255)**.85).astype(np.uint16)
     rgb565 = ((colors[:, 0]>>3)<<11)|((colors[:, 1]>>2)<<5)|(colors[:, 2]>>3)
     bg_index = np.asarray(bg.quantize(palette=palette, dither=Image.Dither.NONE))
+    Image.fromarray(colors[bg_index].astype(np.uint8)).save(out/'background.png')
     # Every frame and the surrounding background use the same quantization.
     background_bytes = rgb565[bg_index].astype('>u2')
     (out/'background.bin').write_bytes(np.rot90(background_bytes).tobytes())
     clips, table, payloads, preview = [], [], bytearray(), []
     total = 0
     for clip_id, name in enumerate(NAMES):
-        frames = np.load(cache/f'{name}.npy', mmap_mode='r')
+        frames = np.load(cache/f'{name}.{SIZE}.npy', mmap_mode='r')
         start = total
         previous = np.zeros((SIZE, SIZE), np.uint8)
-        for i, a in enumerate(frames):
-            for f in (a,):
-                indices = np.asarray(compose(f).quantize(palette=palette, dither=Image.Dither.NONE))
-                key = (total-start) % 24 == 0
-                delta = indices if key else np.bitwise_xor(indices, previous)
-                packed = zlib.compress(delta.tobytes(), 6)
-                table.append((len(payloads), len(packed) | (0x80000000 if key else 0)))
-                payloads.extend(packed)
-                previous = indices.copy()
-                if i == len(frames)//2 and (total-start)%2 == 0:
-                    preview.append(compose(f).resize((168,168)))
-                total += 1
+        count = round(len(frames)*FPS/24)
+        for j in range(count):
+            position = j*len(frames)/count
+            i = int(position)
+            fraction = position-i
+            f = frames[i] if fraction < 1e-6 else intermediate(frames[i], frames[(i+1)%len(frames)], flow, fraction)
+            indices = np.asarray(compose(f).quantize(palette=palette, dither=Image.Dither.NONE))
+            key = j % FPS == 0
+            delta = indices if key else np.bitwise_xor(indices, previous)
+            packed = zlib.compress(delta.tobytes(), 9)
+            table.append((len(payloads), len(packed) | (0x80000000 if key else 0)))
+            payloads.extend(packed)
+            previous = indices.copy()
+            if j == count//2:
+                preview.append(Image.fromarray(colors[indices].astype(np.uint8)).resize((168,168)))
+            total += 1
         clips.append((start, total-start))
         print(f'{clip_id}: {name}: {total-start} frames, total {len(payloads)/1048576:.2f} MiB', flush=True)
     clip_offset = 28+512
     frame_offset = clip_offset+len(clips)*8
     data_offset = frame_offset+len(table)*8
-    header = struct.pack('<4sHHHHIIII', b'DSP1', SIZE, SIZE, 24, len(clips), total, clip_offset, frame_offset, data_offset)
+    header = struct.pack('<4sHHHHIIII', b'DSP1', SIZE, SIZE, FPS, len(clips), total, clip_offset, frame_offset, data_offset)
     pack = header+rgb565.astype('<u2').tobytes()+b''.join(struct.pack('<II',*c) for c in clips)+b''.join(struct.pack('<II',*f) for f in table)+payloads
     (out/'animations.bin').write_bytes(pack)
-    manifest = {'source': SOURCE, 'revision': SHA, 'fps':24, 'size':SIZE,
-        'interpolation':'on-device intermediate RGB565 blend at 48 Hz; source duration retained',
-        'random_actions': list(range(5,13)), 'idle_gap_ms':[8000,22000],
-        'clips':[dict(source_meta[i], first=first, frames=count, seconds=count/24) for i,(first,count) in enumerate(clips)],
+    manifest = {'source': SOURCE, 'revision': SHA, 'fps':FPS, 'size':SIZE,
+        'interpolation':'offline bidirectional optical-flow resampling; source duration retained',
+        'source_fps':24, 'display_gamma':.85, 'random_actions': list(range(5,13)), 'idle_gap_ms':[8000,22000],
+        'clips':[dict(source_meta[i], first=first, frames=count, seconds=count/FPS) for i,(first,count) in enumerate(clips)],
         'sha256':hashlib.sha256(pack).hexdigest(), 'bytes':len(pack)}
     (out/'manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
     sheet = Image.new('RGB',(168*5,168*3),(32,42,73))

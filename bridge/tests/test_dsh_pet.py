@@ -15,26 +15,26 @@ def test_embedded_clips_are_complete_seekable_and_fit_flash():
     manifest = json.loads((ASSETS/'manifest.json').read_text(encoding='utf-8'))
     assert hashlib.sha256(data).hexdigest() == manifest['sha256']
     magic, width, height, fps, clips, frames, co, fo, do = struct.unpack_from('<4sHHHHIIII', data)
-    assert (magic, width, height, fps, clips) == (b'DSP1', 192, 192, 24, 13)
-    assert len(data) + 600_000 < 0xef0000
+    assert (magic, width, height, fps, clips) == (b'DSP1', 168, 168, 40, 13)
+    assert len(data) + 600_000 < 0xff0000
     assert co == 28+512 and fo == co+clips*8 and do == fo+frames*8
     assert manifest['random_actions'] == list(range(5,13))
     assert manifest['idle_gap_ms'] == [8000,22000]
     assert len((ASSETS/'background.bin').read_bytes()) == 240*320*2
     background = np.frombuffer((ASSETS/'background.bin').read_bytes(), '>u2').reshape(320,240)
-    logical_background = np.rot90(background[64:256,24:216], -1)
+    logical_background = np.rot90(background[76:244,36:204], -1)
     palette = np.frombuffer(data[28:540], '<u2')
     seen = 0
     for i in range(clips):
         first, count = struct.unpack_from('<II', data, co+i*8)
         assert first == seen
-        assert count >= 240  # No trimming the original ten-second actions.
+        assert count >= 400  # No trimming the original ten-second actions.
         previous = np.zeros(width*height, np.uint8)
         unique = set()
         for local in range(count):
             offset, size = struct.unpack_from('<II', data, fo+(first+local)*8)
             key = bool(size & 0x80000000)
-            assert key == (local % 24 == 0)
+            assert key == (local % fps == 0)
             length = size & 0x7fffffff
             assert do+offset+length <= len(data)
             decoded = np.frombuffer(zlib.decompress(data[do+offset:do+offset+length]), np.uint8)

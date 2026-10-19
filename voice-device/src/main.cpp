@@ -487,11 +487,11 @@ void loop() {
   pollButton();
   if (!connected && millis()-lastHello>=2000) {
     lastHello=millis();
-      sendJson(FRAME_HELLO,"{\"protocol\":1,\"firmware\":\"voice-device-1.14\"}");
+      sendJson(FRAME_HELLO,"{\"protocol\":1,\"firmware\":\"voice-device-1.16\"}");
   }
   if (connected && millis()-lastStatus>=3000) {
     lastStatus=millis();
-    char status[768];
+    char status[1024];
     snprintf(status,sizeof(status),"{\"listening\":%s,\"playing\":%s,\"speaker_ready\":%s,\"face\":%d,\"frame\":%u,\"uptime_ms\":%lu,\"audio_rx\":%lu,\"audio_ack\":%lu,\"bad_crc\":%lu,\"reset_reason\":%d,\"screen_buffer\":%s,\"compose_us\":%lu,\"push_us\":%lu,\"animation_enabled\":%s,\"presents\":%lu,\"source_updates\":%lu,\"cached_frames\":%u,\"display_theme\":%u,\"ball_bytes\":%lu,\"dirty_tiles\":%u,\"diff_buffer\":%s}",
       listening?"true":"false",playing?"true":"false",speakerReady?"true":"false",currentFace.load(),currentFaceFrame.load(),
       static_cast<unsigned long>(millis()),static_cast<unsigned long>(receivedAudio),
@@ -500,8 +500,8 @@ void loop() {
       static_cast<unsigned long>(lcdComposeUs),static_cast<unsigned long>(lcdPushUs),animationEnabled?"true":"false",
       static_cast<unsigned long>(lcdPresents),static_cast<unsigned long>(lcdSourceUpdates),lcdCachedFrames,displayTheme.load(),static_cast<unsigned long>(qiuqiuPixelBytes.load()),qiuqiuDirtyTiles.load(),qiuqiuPrevious?"true":"false");
     size_t used=strlen(status);
-    snprintf(status+used-1,sizeof(status)-used+1,",\"pet_action\":%lu,\"pet_frame\":%lu,\"pet_random_count\":%lu,\"pet_decode_errors\":%lu}",
-      (unsigned long)pet::action.load(),(unsigned long)pet::frame.load(),(unsigned long)pet::randomCount.load(),(unsigned long)pet::decodeErrors.load());
+    snprintf(status+used-1,sizeof(status)-used+1,",\"pet_action\":%lu,\"pet_frame\":%lu,\"pet_random_count\":%lu,\"pet_decode_errors\":%lu,\"pet_decode_us\":%lu,\"pet_color_us\":%lu,\"pet_blend_us\":%lu,\"pet_internal_frames\":%u}",
+      (unsigned long)pet::action.load(),(unsigned long)pet::frame.load(),(unsigned long)pet::randomCount.load(),(unsigned long)pet::decodeErrors.load(),(unsigned long)pet::decodeUs.load(),(unsigned long)pet::colorUs.load(),(unsigned long)pet::blendUs.load(),pet::internalFrame.load()?1u:0u);
     sendJson(FRAME_STATUS,status);
   }
   pollMicrophone();

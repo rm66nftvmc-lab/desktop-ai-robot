@@ -5,30 +5,41 @@ extern const uint8_t petPack[] asm("_binary_assets_dsh_pet_animations_bin_start"
 extern const uint8_t petBackground[] asm("_binary_assets_dsh_pet_background_bin_start");
 
 namespace pet {
-constexpr int W=192,N=W*W;
+constexpr int W=168,N=W*W,FPS=40,X=36,Y=76;
 static uint8_t *indices=nullptr,*delta=nullptr;
 static uint16_t *a=nullptr,*b=nullptr,*last=nullptr,*from=nullptr;
 static tinfl_decompressor inflaterStorage;
 static tinfl_decompressor *inflater=&inflaterStorage;
 static uint32_t clipOffset,frameOffset,dataOffset;
 static std::atomic<uint32_t> action{0},frame{0},randomCount{0},nextIdle{0},decodeErrors{0};
+static std::atomic<uint32_t> decodeUs{0},colorUs{0},blendUs{0};
+static std::atomic<bool> internalFrame{false};
 static int face=-1,previousRandom=-1;
 static uint32_t began=0,transition=0,lastTick=0;
 static bool valid=false,backgroundNeeded=true;
 static uint32_t u32(const uint8_t *p) {return uint32_t(p[0])|(uint32_t(p[1])<<8)|(uint32_t(p[2])<<16)|(uint32_t(p[3])<<24);}
 static void *alloc(size_t n) {return heap_caps_malloc(n,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);}
-static uint16_t blend(uint16_t x,uint16_t y,unsigned t) {
-  unsigned s=256-t;
-  return (((((x>>11)&31)*s+((y>>11)&31)*t)>>8)<<11)|
-         (((((x>>5)&63)*s+((y>>5)&63)*t)>>8)<<5)|(((x&31)*s+(y&31)*t)>>8);
+static inline uint16_t blend(uint16_t x,uint16_t y,unsigned t) {
+  if(x==y)return x;
+  // Separate green into the high halfword; padding prevents channel carries.
+  // Five-bit interpolation keeps exact endpoints and identical backgrounds.
+  const uint32_t mask=0x07e0f81f;
+  uint32_t a=(uint32_t(x)|(uint32_t(x)<<16))&mask;
+  uint32_t b=(uint32_t(y)|(uint32_t(y)<<16))&mask;
+  unsigned alpha=(t+4)>>3;
+  uint32_t c=((a*(32-alpha)+b*alpha)>>5)&mask;
+  return uint16_t(c|(c>>16));
 }
 static bool init() {
   if(valid) return true;
 
-  if(memcmp(petPack,"DSP1",4)) return false;
+  if(memcmp(petPack,"DSP1",4)||petPack[4]!=W||petPack[6]!=W||petPack[8]!=FPS) return false;
   indices=(uint8_t*)alloc(N);
   delta=(uint8_t*)heap_caps_malloc(N,MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
-  a=(uint16_t*)alloc(N*2);b=(uint16_t*)alloc(N*2);
+  a=(uint16_t*)heap_caps_malloc(N*2,MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
+  internalFrame=a!=nullptr;
+  if(!a)a=(uint16_t*)alloc(N*2);
+  b=(uint16_t*)alloc(N*2);
   last=(uint16_t*)alloc(N*2);from=(uint16_t*)alloc(N*2);
 
   if(!indices||!delta||!a||!b||!last||!from||!inflater) return false;
@@ -36,6 +47,7 @@ static bool init() {
   memset(last,0,N*2);valid=true;return true;
 }
 static bool decode(uint32_t global,bool key) {
+  uint32_t t=micros();
   auto entry=petPack+frameOffset+global*8;
   uint32_t size=u32(entry+4),offset=u32(entry);
   size_t input=size&0x7fffffff,output=N;
@@ -52,9 +64,11 @@ static bool decode(uint32_t global,bool key) {
       memcpy(indices+y*W,row,W);
     }
   }
+  decodeUs.fetch_add(micros()-t);
   return true;
 }
 static void colors(uint16_t *dest) {
+  uint32_t t=micros();
   // Reuse the internal composition buffer as indexed scratch before rendering.
   // Contiguous PSRAM row writes avoid the original transpose cache misses.
   memcpy(lcdFrameBytes,indices,N);
@@ -65,10 +79,11 @@ static void colors(uint16_t *dest) {
     for(int px=0;px<W;++px)row[px]=palette[lcdFrameBytes[px*W+(W-1-py)]];
     memcpy(dest+py*W,row,W*2);
   }
+  colorUs.fetch_add(micros()-t);
 }
 static uint32_t count() {return u32(petPack+clipOffset+action*8+4);}
 static void seek(uint32_t local) {
-  uint32_t first=u32(petPack+clipOffset+action*8),key=local/24*24;
+  uint32_t first=u32(petPack+clipOffset+action*8),key=local/FPS*FPS;
   for(uint32_t f=key;f<=local;++f) if(!decode(first+f,f==key))return;
   colors(a);frame=local;
   // Keep delta decoding state at the upcoming frame. Normal playback advances
@@ -90,8 +105,9 @@ static int target(int f) {
 static void tick(uint32_t now,int current,bool animate,bool force=false) {
   const uint32_t renderStarted=micros();
   if(!init())return;
-  if(!force&&now-lastTick<20)return;
+  if(!force&&now-lastTick<1000/FPS)return;
   lastTick=now;
+  decodeUs=0;colorUs=0;
   if(backgroundNeeded) {
 
     lcdSetWindow(0,0,239,319);lcdBeginPixels();
@@ -100,7 +116,7 @@ static void tick(uint32_t now,int current,bool animate,bool force=false) {
     backgroundNeeded=false;
     // Crossfade the first character from the matching background, never black.
     for(int y=0;y<W;++y)for(int x=0;x<W;++x) {
-      int p=((y+64)*240+x+24)*2;last[y*W+x]=petBackground[p]|(uint16_t(petBackground[p+1])<<8);
+      int p=((y+Y)*240+x+X)*2;last[y*W+x]=petBackground[p]|(uint16_t(petBackground[p+1])<<8);
     }
   }
   if(current!=face) {
@@ -109,7 +125,7 @@ static void tick(uint32_t now,int current,bool animate,bool force=false) {
   }
   if(!animate&&!force)return;
   if(animate) {
-    uint32_t duration=count()*1000/24;
+    uint32_t duration=count()*1000/FPS;
     if(now-began>=duration) {
       if(action>=5) {start(0,now);nextIdle=now+8000+esp_random()%14001;}
       else start(action==0&&esp_random()%3==0?1:action==1?0:action.load(),now);
@@ -118,12 +134,12 @@ static void tick(uint32_t now,int current,bool animate,bool force=false) {
       int id;do{id=5+esp_random()%8;}while(id==previousRandom);
       previousRandom=id;++randomCount;start(id,now);
     }
-    uint32_t wanted=((now-began)*24/1000)%count();
+    uint32_t wanted=((now-began)*FPS/1000)%count();
     if(wanted!=frame) {
       uint32_t first=u32(petPack+clipOffset+action*8);
       uint32_t old=frame.load(),steps=(wanted+count()-old)%count();
-      if(steps<=24) {
-        if(steps==1) memcpy(a,b,N*2);
+      if(steps<=FPS) {
+        if(steps==1) {auto previous=a;a=b;b=previous;}
         else {
           // The decoder already contains old+1 (the lookahead frame). Replay
           // only skipped deltas, never restart from a distant keyframe.
@@ -137,18 +153,21 @@ static void tick(uint32_t now,int current,bool animate,bool force=false) {
       } else seek(wanted);
     }
   }
-  unsigned fraction=animate?((now-began)*24%1000)*256/1000:0;
+  uint32_t blendStarted=micros();
   unsigned fade=min(256u,(now-transition)*256/220);
-  uint16_t ar[W],br[W],fr[W],out[W];
-  for(int y=0;y<W;++y) {
-    memcpy(ar,a+y*W,W*2);memcpy(br,b+y*W,W*2);memcpy(fr,from+y*W,W*2);
-    for(int x=0;x<W;++x) {
-      uint16_t c=blend(__builtin_bswap16(ar[x]),__builtin_bswap16(br[x]),fraction);
-      if(fade<256)c=blend(__builtin_bswap16(fr[x]),c,fade);
-      out[x]=__builtin_bswap16(c);
+  // Normal playback copies a complete precomputed motion frame. Only state
+  // changes blend against the last displayed image, avoiding empty frames.
+  if(fade>=256)memcpy(lcdFrameBytes,a,N*2);
+  else {
+    uint16_t ar[W],fr[W],out[W];
+    for(int y=0;y<W;++y) {
+      memcpy(ar,a+y*W,W*2);memcpy(fr,from+y*W,W*2);
+      for(int x=0;x<W;++x)
+        out[x]=__builtin_bswap16(blend(__builtin_bswap16(fr[x]),__builtin_bswap16(ar[x]),fade));
+      memcpy(lcdFrameBytes+y*W*2,out,W*2);
     }
-    memcpy(lcdFrameBytes+y*W*2,out,W*2);
   }
+  blendUs=micros()-blendStarted;
   lcdComposeUs=micros()-renderStarted;
   const uint32_t pushStarted=micros();
   // Final opaque tiles only: no clearing pass, no empty intermediate frame.
@@ -160,7 +179,7 @@ static void tick(uint32_t now,int current,bool animate,bool force=false) {
     };
     if(!changed(x)){x+=8;continue;}
     int left=x;do{x+=8;}while(x<W&&changed(x));
-    lcdSetWindow(24+left,64+y,24+x-1,64+y+7);lcdBeginPixels();
+    lcdSetWindow(X+left,Y+y,X+x-1,Y+y+7);lcdBeginPixels();
     for(int yy=y;yy<y+8;++yy) SPI.writeBytes(lcdFrameBytes+(yy*W+left)*2,(x-left)*2);
     lcdEndPixels();
   }
