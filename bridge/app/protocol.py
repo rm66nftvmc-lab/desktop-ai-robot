@@ -24,6 +24,7 @@ AUDIO_END = 0x0B
 FACE = 0x0C
 ANIMATION = 0x0D
 THEME = 0x0E
+SCREEN_TEST = 0x0F  # Local serial diagnostic: 0 normal, 1 hold, 2 repeat same pose.
 
 
 @dataclass(frozen=True)

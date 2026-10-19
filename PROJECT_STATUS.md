@@ -2,6 +2,14 @@
 
 Last updated: 2026-10-19
 
+## Controlled static-screen A/B diagnostic (2026-10-19)
+
+- User authorized a controlled comparison before changing wiring. Firmware **1.21** adds local serial-only `SCREEN_TEST` command 0x0F: 0 returns to animation, 1 freezes the last displayed image without writes, 2 repeatedly writes that same frozen viewport at the normal 40-Hz scheduling target. No scan, SPI clock, palette, background or audio gain change was made from 1.20. Normal ANIMATION commands clear the diagnostic; face changes cancel it.
+- New telemetry reports `screen_test`, `screen_test_hash` (captured FNV-1a of frozen source pixels, not LCD readback) and `pixel_writes` (all RAMWR starts). `scripts/display_ab_test.py` owns the serial port, keeps heartbeat active, switches via a control file, validates unchanged image hash and write-count behavior, aborts on button input, and requests normal animation in cleanup. With `--restore-bridge`, it restores Bridge after releasing the port; default timeout is ten minutes. Logs/control files stay outside Git.
+- Live test used physical theme 2, the same frozen source frame **60**, fingerprint **1607504220**. Hold phase: `pixel_writes` stayed at **67** over multiple three-second status intervals. User: **no flicker or discomfort**. Repeat phase: fingerprint/frame unchanged, writes increased by **120 per three seconds** (~40/s), CRC 0 and uninterrupted uptime. User: **still no flicker or discomfort**.
+- Both conditions were stable in this controlled comparison, unlike the earlier subjective 1.19 repeat report. It does not prove that power or signal integrity is fault-free, and it does not establish that animation assets are responsible. Repeated identical writes alone did not reproduce the complaint under the current settings. Next check is whether ordinary changing animation reproduces it before proceeding to clock/wiring isolation.
+- Test ended and Bridge was restored. Device reports **voice-device-1.21**, connected, theme 2, animation enabled and changing frame numbers. Normal-animation physical feedback is pending. Prior 1.20 throughput/transport results remain historical; this revision has not been claimed as a flicker cure.
+
 ## DSH Pet continuous rectangle transport (2026-10-19)
 
 - User confirmed 1.16 stutter gone but uncomfortable flicker remained. 1.17 high scan reduced flicker but made the panel nearly unreadable; 1.18 intermediate scan restored brightness but retained obvious flicker. Both scan experiments are superseded.

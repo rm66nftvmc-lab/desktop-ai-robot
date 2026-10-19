@@ -15,7 +15,7 @@ static constexpr uint8_t FRAME_STATUS=1, FRAME_DISPLAY=2, FRAME_AUDIO_UP=3, FRAM
 static constexpr uint8_t FRAME_HEARTBEAT=5, FRAME_BUTTON=6, FRAME_ACK=8;
 static constexpr uint8_t FRAME_HELLO=9, FRAME_WELCOME=10, FRAME_AUDIO_END=11, FRAME_FACE=12;
 static constexpr uint8_t FRAME_ANIMATION=13;
-static constexpr uint8_t FRAME_THEME=14;
+static constexpr uint8_t FRAME_THEME=14, FRAME_SCREEN_TEST=15;
 static std::atomic<uint8_t> displayTheme{1};
 static std::atomic<int> pendingTheme{-1};
 static std::atomic<int> pendingFace{-1},pendingColor{-1};
@@ -38,7 +38,7 @@ static std::atomic<bool> animationEnabled{true};
 static uint8_t *lcdFrameBytes=nullptr;
 static constexpr uint16_t lcdCachedFrames=0; // Legacy telemetry field; no character frame cache.
 static std::atomic<uint32_t> lcdComposeUs{0},lcdPushUs{0};
-static std::atomic<uint32_t> lcdPresents{0},lcdSourceUpdates{0};
+static std::atomic<uint32_t> lcdPresents{0},lcdSourceUpdates{0},lcdPixelWrites{0};
 
 static uint16_t crcStep(uint16_t crc, const uint8_t *data, size_t length) {
   for (size_t i=0; i<length; ++i) {
@@ -88,6 +88,7 @@ static void lcdSetWindow(int x0,int y0,int x1,int y1) {
 }
 
 static void lcdBeginPixels() {
+  ++lcdPixelWrites;
   SPI.beginTransaction(lcdSpi);
   digitalWrite(LCD_CS,LOW); digitalWrite(LCD_DC,LOW); SPI.transfer(0x2C);
   digitalWrite(LCD_DC,HIGH);
@@ -373,8 +374,11 @@ static void handleFrame(uint8_t kind,const uint8_t *payload,uint16_t length) {
     lcdDrawFace(listening?FACE_ID_LISTEN:payload[0]);
   } else if (kind==FRAME_THEME && connected && length==1 && payload[0]<=2) {
     pendingTheme=payload[0]==2?2:1;
+  } else if (kind==FRAME_SCREEN_TEST && connected && length==1 && payload[0]<=2
+             && displayTheme==2 && !playing && !listening) {
+    pet::testMode=payload[0];animationEnabled=payload[0]==0;
   } else if (kind==FRAME_ANIMATION && connected && length==1) {
-    animationEnabled=payload[0]!=0;
+    pet::testMode=0;animationEnabled=payload[0]!=0;
   } else if (kind==FRAME_HEARTBEAT && connected) {
     lastHost=millis();
   } else if (kind==FRAME_DISPLAY && connected && length==2) {
@@ -492,7 +496,7 @@ void loop() {
   pollButton();
   if (!connected && millis()-lastHello>=2000) {
     lastHello=millis();
-      sendJson(FRAME_HELLO,"{\"protocol\":1,\"firmware\":\"voice-device-1.20\"}");
+      sendJson(FRAME_HELLO,"{\"protocol\":1,\"firmware\":\"voice-device-1.21\"}");
   }
   if (connected && millis()-lastStatus>=3000) {
     lastStatus=millis();
@@ -505,8 +509,8 @@ void loop() {
       static_cast<unsigned long>(lcdComposeUs),static_cast<unsigned long>(lcdPushUs),animationEnabled?"true":"false",
       static_cast<unsigned long>(lcdPresents),static_cast<unsigned long>(lcdSourceUpdates),lcdCachedFrames,displayTheme.load(),static_cast<unsigned long>(qiuqiuPixelBytes.load()),qiuqiuDirtyTiles.load(),qiuqiuPrevious?"true":"false");
     size_t used=strlen(status);
-    snprintf(status+used-1,sizeof(status)-used+1,",\"pet_action\":%lu,\"pet_frame\":%lu,\"pet_random_count\":%lu,\"pet_decode_errors\":%lu,\"pet_decode_us\":%lu,\"pet_color_us\":%lu,\"pet_blend_us\":%lu,\"pet_internal_frames\":%u}",
-      (unsigned long)pet::action.load(),(unsigned long)pet::frame.load(),(unsigned long)pet::randomCount.load(),(unsigned long)pet::decodeErrors.load(),(unsigned long)pet::decodeUs.load(),(unsigned long)pet::colorUs.load(),(unsigned long)pet::blendUs.load(),pet::internalFrame.load()?1u:0u);
+    snprintf(status+used-1,sizeof(status)-used+1,",\"pet_action\":%lu,\"pet_frame\":%lu,\"pet_random_count\":%lu,\"pet_decode_errors\":%lu,\"pet_decode_us\":%lu,\"pet_color_us\":%lu,\"pet_blend_us\":%lu,\"pet_internal_frames\":%u,\"screen_test\":%u,\"screen_test_hash\":%lu,\"pixel_writes\":%lu}",
+      (unsigned long)pet::action.load(),(unsigned long)pet::frame.load(),(unsigned long)pet::randomCount.load(),(unsigned long)pet::decodeErrors.load(),(unsigned long)pet::decodeUs.load(),(unsigned long)pet::colorUs.load(),(unsigned long)pet::blendUs.load(),pet::internalFrame.load()?1u:0u,pet::testMode.load(),(unsigned long)pet::testHash.load(),(unsigned long)lcdPixelWrites.load());
     sendJson(FRAME_STATUS,status);
   }
   pollMicrophone();

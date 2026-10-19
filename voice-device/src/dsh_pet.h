@@ -17,6 +17,11 @@ static std::atomic<bool> internalFrame{false};
 static int face=-1,previousRandom=-1;
 static uint32_t began=0,transition=0,lastTick=0;
 static bool valid=false,backgroundNeeded=true;
+// Diagnostic-only wire command: 1 = hold without writes; 2 = repeat same image.
+// Normal ANIMATION commands clear this mode; no web control enables it.
+static std::atomic<unsigned> testMode{0};
+static std::atomic<uint32_t> testHash{0};
+static bool testCaptured=false;
 static uint32_t u32(const uint8_t *p) {return uint32_t(p[0])|(uint32_t(p[1])<<8)|(uint32_t(p[2])<<16)|(uint32_t(p[3])<<24);}
 static void *alloc(size_t n) {return heap_caps_malloc(n,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);}
 static inline uint16_t blend(uint16_t x,uint16_t y,unsigned t) {
@@ -120,8 +125,28 @@ static void tick(uint32_t now,int current,bool animate,bool force=false) {
     }
   }
   if(current!=face) {
+    if(testMode) {testMode=0;animationEnabled=true;}
     face=current;start(target(current),now);
     nextIdle=now+8000+esp_random()%14001;
+  }
+  if(!testMode)testCaptured=false;
+  if(testMode&&!force) {
+    if(!testCaptured) {
+      uint8_t row[W*2];uint32_t hash=2166136261u;
+      for(int y=0;y<W;++y) {
+        memcpy(row,last+y*W,W*2);
+        for(auto value:row)hash=(hash^value)*16777619u;
+      }
+      testHash=hash;testCaptured=true;
+    }
+    if(testMode==2) {
+      lcdSetWindow(X,Y,X+W-1,Y+W-1);lcdBeginPixels();
+      for(int y=0;y<W;++y) {
+        memcpy(lcdRowBytes,last+y*W,W*2);SPI.writeBytes(lcdRowBytes,W*2);
+      }
+      lcdEndPixels();++lcdPresents;
+    }
+    return;
   }
   if(!animate&&!force)return;
   if(animate) {
