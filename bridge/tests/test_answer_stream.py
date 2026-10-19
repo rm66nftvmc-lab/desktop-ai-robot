@@ -66,6 +66,7 @@ def test_theme_persistence_auth_origin_validation_and_reconnect(tmp_path):
     client.post('/api/login', json={'token': 'test-access-token'})
     assert client.post('/api/device/theme', json={'theme': 'qiuqiu'}, headers={'origin':'https://bad.test'}).status_code == 403
     assert client.post('/api/device/theme', json={'theme': 'invalid'}).status_code == 422
+    assert client.post('/api/device/theme', json={'theme': 'original'}).status_code == 422
     assert client.post('/api/device/theme', json={'theme': 'qiuqiu'}).status_code == 200
     device = create_app(tmp_path, token='test-access-token').state.device
     port = io.BytesIO()
@@ -77,9 +78,15 @@ def test_theme_persistence_auth_origin_validation_and_reconnect(tmp_path):
     device._handle(Frame(HELLO, 0, b'{"protocol":1}'), port, 3)
     device._send_pending_theme(port, 4)
     assert FrameParser().feed(port.getvalue())[-1] == Frame(THEME, 4, b'\x01')
-    device.set_theme(0)
-    assert device.snapshot()['desired_theme'] == 0
+    with pytest.raises(ValueError): device.set_theme(0)
+    assert device.snapshot()['desired_theme'] == 1
     with pytest.raises(ValueError): device.set_theme(3)
+    from bridge.app.storage import set_setting, get_setting
+    database = tmp_path / 'messages.sqlite3'
+    set_setting(database, 'display_theme', 'original')
+    upgraded = create_app(tmp_path, token='test-access-token').state.device
+    assert upgraded.snapshot()['desired_theme'] == 1
+    assert get_setting(database, 'display_theme') == 'qiuqiu'
 
 
 def test_stop_api_cannot_cancel_a_different_conversation_or_agent(tmp_path):

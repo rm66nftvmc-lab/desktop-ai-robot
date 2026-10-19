@@ -3,10 +3,8 @@
 #include <driver/i2s.h>
 #include <esp_system.h>
 #include <esp_heap_caps.h>
-#include <rom/miniz.h>
 
 #include "faces.h"
-#include "screen_assets.h"
 #include "qiuqiu_assets.h"
 #include "qiuqiu_motion.h"
 #include <math.h>
@@ -18,15 +16,13 @@ static constexpr uint8_t FRAME_HEARTBEAT=5, FRAME_BUTTON=6, FRAME_ACK=8;
 static constexpr uint8_t FRAME_HELLO=9, FRAME_WELCOME=10, FRAME_AUDIO_END=11, FRAME_FACE=12;
 static constexpr uint8_t FRAME_ANIMATION=13;
 static constexpr uint8_t FRAME_THEME=14;
-static std::atomic<uint8_t> displayTheme{0};
-static std::atomic<int> pendingTheme{-1},pendingFace{-1},pendingColor{-1};
+static constexpr uint8_t displayTheme=1; // Emotion Ball is the only installed display.
+static std::atomic<int> pendingFace{-1},pendingColor{-1};
 static bool screenTaskRunning=false;
 static constexpr uint16_t MAX_PAYLOAD=1024;
 static constexpr int KEY_PIN=1, SAMPLE_RATE=16000;
 static constexpr int LCD_CS=8, LCD_DC=9, LCD_RST=10, LCD_MOSI=11, LCD_SCLK=12;
 static constexpr int LCD_WIDTH=240, LCD_HEIGHT=320;
-static_assert(LCD_WIDTH==SCREEN_BG_WIDTH && LCD_HEIGHT==SCREEN_BG_HEIGHT,
-              "LCD and generated background dimensions must match");
 static SPISettings lcdSpi(40000000, MSBFIRST, SPI_MODE0);
 static bool micReady=false,speakerReady=false;
 static std::atomic<bool> connected{false},listening{false},playing{false};
@@ -39,20 +35,9 @@ static uint8_t lcdRowBytes[LCD_WIDTH*2];
 static std::atomic<uint8_t> currentFaceFrame{0};
 static std::atomic<bool> animationEnabled{true};
 static uint8_t *lcdFrameBytes=nullptr;
-// The decoder's Huffman tables exceed Arduino's default 8 KB loop stack.
-static tinfl_decompressor lcdInflater;
-static uint8_t *lcdFrameCache[FACE_COUNT][SCREEN_ANIMATION_FRAME_COUNT]={};
-static uint16_t lcdCachedFrames=0;
+static constexpr uint16_t lcdCachedFrames=0; // Legacy telemetry field; no character frame cache.
 static std::atomic<uint32_t> lcdComposeUs{0},lcdPushUs{0};
-static ScreenDirtyRect lcdCachedRect={0,0,0,0};
-static size_t lcdCachedLength=0;
 static std::atomic<uint32_t> lcdPresents{0},lcdSourceUpdates{0};
-static uint8_t currentFaceRepeat=0;
-static uint32_t lastFaceFrameAt=0;
-static constexpr uint32_t FACE_FRAME_INTERVAL_MS=45;
-static constexpr uint8_t FACE_FRAME_REPEATS=3;
-static_assert(FACE_FRAME_INTERVAL_MS%FACE_FRAME_REPEATS==0,"Repeat slots must divide source-frame duration");
-static constexpr uint32_t FACE_REFRESH_INTERVAL_MS=FACE_FRAME_INTERVAL_MS/FACE_FRAME_REPEATS;
 
 static uint16_t crcStep(uint16_t crc, const uint8_t *data, size_t length) {
   for (size_t i=0; i<length; ++i) {
@@ -128,36 +113,7 @@ static void lcdFill(uint16_t color) {
   lcdFillRect(0,0,LCD_WIDTH-1,LCD_HEIGHT-1,color);
 }
 
-// The pet's expressions live in flash as run-length encoded RGB565
-// (see scripts/build_faces.py), so they survive a power cut and need no network.
 static std::atomic<int> currentFace{-1};
-
-static void lcdDrawBackground() {
-  lcdSetWindow(0,0,LCD_WIDTH-1,LCD_HEIGHT-1);
-  lcdBeginPixels();
-  for (int y=0;y<LCD_HEIGHT;++y) {
-    for (int x=0;x<LCD_WIDTH;++x) {
-      uint16_t color=pgm_read_word(&SCREEN_BACKGROUND[y*LCD_WIDTH+x]);
-      lcdRowBytes[x*2]=color>>8;
-      lcdRowBytes[x*2+1]=color&0xFF;
-    }
-    SPI.writeBytes(lcdRowBytes,sizeof(lcdRowBytes));
-  }
-  lcdEndPixels();
-}
-
-static void lcdPresentCachedFrame() {
-  if (!lcdFrameBytes || !lcdCachedLength) return;
-  const int top=(LCD_HEIGHT-FACE_PIXELS)/2;
-  lcdSetWindow(lcdCachedRect.x0,top+lcdCachedRect.y0,
-               lcdCachedRect.x1,top+lcdCachedRect.y1);
-  const uint32_t pushStarted=micros();
-  lcdBeginPixels();
-  SPI.writeBytes(lcdFrameBytes,lcdCachedLength);
-  lcdEndPixels();
-  lcdPushUs=micros()-pushStarted;
-  ++lcdPresents;
-}
 
 // Every update is opaque and precomposed. Only theme entry transfers the full
 // sphere; normal updates touch the eye/mouth area, including while recording.
@@ -297,129 +253,29 @@ static void lcdDrawQiuqiu() {
   qiuqiuNeedsFull=false;
 }
 
-static bool lcdDecodeFrame(const ScreenCompressedFrame &frame,uint8_t *output) {
-  size_t inputBytes=frame.size,decoded=LCD_WIDTH*FACE_PIXELS*2;
-  tinfl_init(&lcdInflater);
-  const tinfl_status result=tinfl_decompress(&lcdInflater,frame.data,&inputBytes,
-    output,output,&decoded,TINFL_FLAG_PARSE_ZLIB_HEADER|TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF);
-  return result==TINFL_STATUS_DONE && decoded==LCD_WIDTH*FACE_PIXELS*2;
-}
-
-static void lcdWarmFrameCache() {
-  // Cache animated poses once at boot; playback never needs to allocate.
-  // 64 poses occupy 7,372,800 bytes of this board's 8 MB PSRAM.
-  for (int index=0;index<FACE_COUNT;++index) {
-    ScreenFaceFrames face;
-    memcpy_P(&face,&SCREEN_FACES[index],sizeof(face));
-    if (face.count<2) continue;
-    for (uint8_t frame=0;frame<face.count;++frame) {
-      auto *pixels=static_cast<uint8_t *>(heap_caps_malloc(LCD_WIDTH*FACE_PIXELS*2,
-        MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
-      if (!pixels) return; // Uncached poses retain the decoding fallback.
-      if (!lcdDecodeFrame(face.frame[frame],pixels)) {free(pixels);continue;}
-      lcdFrameCache[index][frame]=pixels;
-      ++lcdCachedFrames;
-    }
-  }
-}
-
-static uint8_t lcdDrawFaceFrame(int index,uint8_t frameIndex,bool partial=false) {
-  if (index<0 || index>=FACE_COUNT) return 1;
-  ScreenFaceFrames face;
-  memcpy_P(&face,&SCREEN_FACES[index],sizeof(face));
-  if (!face.count) return 1;
-  if (frameIndex>=face.count) frameIndex=0;
-  const ScreenCompressedFrame &frame=face.frame[frameIndex];
-  if (!frame.data) return face.count;
-
-  const int top=(LCD_HEIGHT-FACE_PIXELS)/2;
-  if (top<0) return face.count;
-  int x0=0,y0=0,x1=LCD_WIDTH-1,y1=FACE_PIXELS-1;
-  if (partial) {
-    const ScreenDirtyRect &dirty=frame.dirty;
-    x0=dirty.x0; y0=dirty.y0; x1=dirty.x1; y1=dirty.y1;
-  }
-  // Decode the complete precomposited frame before touching the LCD.
-  if (!lcdFrameBytes) return face.count;
-  const uint32_t composeStarted=micros();
-  const int rowBytes=(x1-x0+1)*2;
-
-  const uint8_t *pixels=lcdFrameCache[index][frameIndex];
-  if (!pixels) {
-    if (!lcdDecodeFrame(frame,lcdFrameBytes)) {
-      lcdCachedLength=0;
-      return face.count; // Retain the LCD's last valid image.
-    }
-    pixels=lcdFrameBytes;
-  }
-  for (int y=y0;y<=y1;++y)
-    memmove(lcdFrameBytes+(y-y0)*rowBytes,
-            pixels+(y*LCD_WIDTH+x0)*2,rowBytes);
-  lcdComposeUs=micros()-composeStarted;
-  lcdCachedRect={static_cast<uint8_t>(x0),static_cast<uint8_t>(y0),
-                 static_cast<uint8_t>(x1),static_cast<uint8_t>(y1)};
-  lcdCachedLength=rowBytes*(y1-y0+1);
-  ++lcdSourceUpdates;
-  lcdPresentCachedFrame();
-  return face.count;
-}
-
 static void lcdApplyFace(int index) {
   if (index<0 || index>=FACE_COUNT || index==currentFace) return;
   currentFace=index;
   currentFaceFrame=0;
-  currentFaceRepeat=0;
-  if (displayTheme==1) lcdDrawQiuqiu();
-  else lcdDrawFaceFrame(currentFace,currentFaceFrame);
-  lastFaceFrameAt=millis();
+  lcdDrawQiuqiu();
 }
 
 static void lcdTickAnimation() {
-  const uint32_t elapsed=millis()-lastFaceFrameAt;
-  if (displayTheme==1) {
-    // Dirty-region updates keep recording animated without full-screen SPI stalls.
-    static uint32_t lastQiuqiuUs=0;
-    const uint32_t now=micros(),passed=now-lastQiuqiuUs;
-    if (!animationEnabled) {lastQiuqiuUs=now;return;}
-    if (passed<16667) return;
-    lastQiuqiuUs+=passed/16667*16667;
-    lcdDrawQiuqiu();
-    return;
-  }
-  if (!animationEnabled || currentFace<0 || elapsed<FACE_REFRESH_INTERVAL_MS) return;
-  ScreenFaceFrames face;
-  memcpy_P(&face,&SCREEN_FACES[currentFace],sizeof(face));
-  if (face.count<2) return;
-  // Anchor to the clock rather than adding draw time to every interval.
-  // Each interpolated pose lasts 45 ms with three presentations.
-  // Four poses retain the original 180 ms source interval.
-  const uint32_t slots=elapsed/FACE_REFRESH_INTERVAL_MS;
-  lastFaceFrameAt+=slots*FACE_REFRESH_INTERVAL_MS;
-  const uint32_t advances=(currentFaceRepeat+slots)/FACE_FRAME_REPEATS;
-  currentFaceRepeat=(currentFaceRepeat+slots)%FACE_FRAME_REPEATS;
-  if (advances) {
-    currentFaceFrame=(currentFaceFrame+advances)%face.count;
-    // Dirty bounds describe adjacent frames only. A late/skipped pose must
-    // repaint the full region to avoid leaving pixels from an older pose.
-    lcdDrawFaceFrame(currentFace.load(),currentFaceFrame.load(),advances==1);
-  } else {
-    lcdPresentCachedFrame();
-  }
+  static uint32_t lastQiuqiuUs=0;
+  const uint32_t now=micros(),passed=now-lastQiuqiuUs;
+  if (!animationEnabled) {lastQiuqiuUs=now;return;}
+  if (passed<16667) return;
+  lastQiuqiuUs+=passed/16667*16667;
+  lcdDrawQiuqiu();
 }
 
 static void lcdDrawFace(int index) {
   if(index>=0 && index<FACE_COUNT) pendingFace.store(index);
 }
 
-// SPI, pixel composition, and both themes have exactly one owner. Audio I2S
+// SPI and Emotion Ball pixel composition have exactly one owner. Audio I2S
 // writes on the Arduino core cannot block this task's display cadence.
 static void lcdService() {
-  int theme=pendingTheme.exchange(-1);
-  if(theme>=0 && theme!=displayTheme.load()) {
-    displayTheme=theme; qiuqiuNeedsFull=true; qiuqiuPreviousValid=false;
-    if(theme==1) lcdFill(0x0843); else lcdDrawBackground();
-    int face=currentFace.load(); currentFace=-1; lcdApplyFace(face);
-  }
   int face=pendingFace.exchange(-1);
   if(face>=0) lcdApplyFace(face);
   int color=pendingColor.exchange(-1);
@@ -432,11 +288,10 @@ static void lcdTask(void *) {
 }
 
 static void lcdInit() {
-  const size_t frameBytes=LCD_WIDTH*FACE_PIXELS*2;
+  const size_t frameBytes=192*192*2;
   lcdFrameBytes=static_cast<uint8_t *>(heap_caps_malloc(frameBytes,MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT));
   if (!lcdFrameBytes)
     lcdFrameBytes=static_cast<uint8_t *>(heap_caps_malloc(frameBytes,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
-  lcdWarmFrameCache();
   qiuqiuPrevious=static_cast<uint8_t *>(heap_caps_malloc(QW*QH*2,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
   qiuqiuBase=static_cast<uint8_t *>(heap_caps_malloc(192*192*2,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
   if(qiuqiuBase) for(int y=0;y<192;++y) for(int x=0;x<192;++x) {
@@ -452,7 +307,7 @@ static void lcdInit() {
   const uint8_t rgb565=0x55, orientation=0;
   lcdCommand(0x3A,&rgb565,1); lcdCommand(0x36,&orientation,1);
   lcdCommand(0x21); lcdCommand(0x13); delay(10); lcdCommand(0x29); delay(100);
-  lcdDrawBackground();
+  lcdFill(0x0843);
 }
 
 static bool startMicrophone() {
@@ -502,7 +357,7 @@ static void handleFrame(uint8_t kind,const uint8_t *payload,uint16_t length) {
   } else if (kind==FRAME_FACE && connected && length==1) {
     lcdDrawFace(listening?FACE_ID_LISTEN:payload[0]);
   } else if (kind==FRAME_THEME && connected && length==1 && payload[0]<=1) {
-    pendingTheme.store(payload[0]);
+    /* Legacy 0/1 requests both retain Emotion Ball. */
   } else if (kind==FRAME_ANIMATION && connected && length==1) {
     animationEnabled=payload[0]!=0;
   } else if (kind==FRAME_HEARTBEAT && connected) {
@@ -622,7 +477,7 @@ void loop() {
   pollButton();
   if (!connected && millis()-lastHello>=2000) {
     lastHello=millis();
-      sendJson(FRAME_HELLO,"{\"protocol\":1,\"firmware\":\"voice-device-1.12\"}");
+      sendJson(FRAME_HELLO,"{\"protocol\":1,\"firmware\":\"voice-device-1.13\"}");
   }
   if (connected && millis()-lastStatus>=3000) {
     lastStatus=millis();
@@ -633,7 +488,7 @@ void loop() {
       static_cast<unsigned long>(sentAcks),static_cast<unsigned long>(badCrc),
       static_cast<int>(esp_reset_reason()),lcdFrameBytes?"true":"false",
       static_cast<unsigned long>(lcdComposeUs),static_cast<unsigned long>(lcdPushUs),animationEnabled?"true":"false",
-      static_cast<unsigned long>(lcdPresents),static_cast<unsigned long>(lcdSourceUpdates),lcdCachedFrames,displayTheme.load(),static_cast<unsigned long>(qiuqiuPixelBytes.load()),qiuqiuDirtyTiles.load(),qiuqiuPrevious?"true":"false");
+      static_cast<unsigned long>(lcdPresents),static_cast<unsigned long>(lcdSourceUpdates),lcdCachedFrames,displayTheme,static_cast<unsigned long>(qiuqiuPixelBytes.load()),qiuqiuDirtyTiles.load(),qiuqiuPrevious?"true":"false");
     sendJson(FRAME_STATUS,status);
   }
   pollMicrophone();

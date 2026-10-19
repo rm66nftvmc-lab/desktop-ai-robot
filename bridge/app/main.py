@@ -129,7 +129,9 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
     audio_output = AudioOutput(data_dir)
     device = DeviceLink(speech.enqueue, lambda generation: voice.on_listen_start(generation),
                         audio_output=audio_output, on_disconnect=lambda: voice.on_device_disconnect())
-    device.set_theme(1 if get_setting(database, 'display_theme') == 'qiuqiu' else 0)
+    if get_setting(database, 'display_theme') != 'qiuqiu':
+        set_setting(database, 'display_theme', 'qiuqiu')
+    device.set_theme(1)
     device.set_quiet_playback(selected_voice(data_dir).startswith('cosyvoice'))
     voice = VoiceConversation(database, data_dir, device, hermes, audio_output=audio_output,
                               workers={"hermes": hermes, "deepseek_harness": harness},
@@ -293,10 +295,10 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
     @app.post('/api/device/theme', dependencies=[Depends(require_session)])
     def set_display_theme(body: DisplayThemeBody, request: Request) -> dict:
         check_origin(request)
-        if body.theme not in ('original', 'qiuqiu'):
+        if body.theme != 'qiuqiu':
             raise HTTPException(status_code=422, detail='Unknown display theme')
         set_setting(database, 'display_theme', body.theme)
-        device.set_theme(1 if body.theme == 'qiuqiu' else 0)
+        device.set_theme(1)
         return {'theme': body.theme, 'queued': True}
 
     @app.post("/api/device/animation", dependencies=[Depends(require_session)])

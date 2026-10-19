@@ -1,6 +1,13 @@
 # Desktop AI Robot project status
 
-Last updated: 2026-10-18
+Last updated: 2026-10-19
+
+## Emotion Ball only firmware (2026-10-19)
+
+- User requested removal of the first downloaded whale-girl character from firmware. `voice-device-1.13` removes its compiled bitmap/compressed-frame header, decoder, background renderer and 7,372,800-byte pose cache. `faces.h` now contains only the eight stable state protocol IDs; Emotion Ball texture, continuous motion, transitions and changed-tile rendering remain.
+- Boot renders Emotion Ball directly. Theme telemetry is always 1; old wire commands 0/1 both retain the sphere. Bridge migrates any `original` preference to `qiuqiu`, rejects the removed API choice and exposes only Emotion Ball in the display menu. Original-character media/generators outside the firmware remain historical artifacts and are not built into the device.
+- Firmware flash usage dropped from approximately 2.80 MB to **371,181 bytes** (11.1% of the application slot); binary image is 371,552 bytes. Pixel composition buffer is now 73,728 bytes, with no legacy frame cache or decompressor allocation.
+- Compiled and flashed to COM9 successfully. Live device reports `voice-device-1.13`, actual/desired theme 1, cached frames 0, changed-tile buffer present, animation enabled, CRC 0 and **180 presentations in 3 seconds**. Physical appearance is not inferred from telemetry. Regression suite: **141 Python tests + 11 Node interaction tests passed**; retired bitmap tests were replaced with Emotion Ball texture/transport validation, and legacy preference migration is covered.
 
 ## Free local Qiuqiu voice and UI (2026-10-18)
 

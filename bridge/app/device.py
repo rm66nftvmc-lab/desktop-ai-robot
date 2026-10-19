@@ -82,13 +82,13 @@ class DeviceLink:
         self._animation_requested = True
         self._animation_sent: bool | None = None
         self._quiet_playback = False
-        self._desired_theme = 0
-        self._pending_theme = 0
+        self._desired_theme = 1
+        self._pending_theme = 1
         self._state['display_theme'] = None
-        self._state['desired_theme'] = 0
+        self._state['desired_theme'] = 1
 
     def set_theme(self, theme: int) -> None:
-        if type(theme) is not int or theme not in (0, 1):
+        if type(theme) is not int or theme != 1:
             raise ValueError('Unknown display theme')
         with self._lock:
             self._desired_theme = self._pending_theme = theme

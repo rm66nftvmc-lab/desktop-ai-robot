@@ -698,7 +698,7 @@ async function refreshStatus() {
     showWorkspace();
     updateDevice(status.device);
     if (!displayPending) {
-      const desired = status.device.desired_theme === 1 ? "qiuqiu" : "original";
+      const desired = "qiuqiu";
       $("#display-theme").value = desired;
       $("#display-state").textContent = !status.device.connected ? "设备重连后应用" :
         status.device.display_theme === status.device.desired_theme ? "已应用" : "等待设备应用…";

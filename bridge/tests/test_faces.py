@@ -1,7 +1,7 @@
 """The robot's expressions, and the frame that tells it which one to wear.
 
 The face indices are shared between three places that can drift apart: this
-module, the generated ``voice-device/src/faces.h``, and the firmware that draws
+module, the protocol-only ``voice-device/src/faces.h``, and the firmware that draws
 them. These tests pin the first two together so a mismatch fails in CI instead
 of showing the wrong feeling on the device.
 """
@@ -51,15 +51,9 @@ class FakeHermes:
 # --------------------------------------------------------------- index agreement
 def test_bridge_face_order_matches_the_generated_header():
     entries = re.findall(r"FACE_ID_(\w+)\s*=\s*(\d+)", FACES_HEADER.read_text(encoding="utf-8"))
-    assert entries, "faces.h has no FACE_ID_ enum; re-run scripts/build_faces.py"
+    assert entries, "faces.h has no FACE_ID_ protocol enum"
     assert [name for name, _ in entries] == list(faces.NAMES)
     assert [int(index) for _, index in entries] == list(range(faces.COUNT))
-
-
-def test_every_face_has_artwork_in_the_header():
-    text = FACES_HEADER.read_text(encoding="utf-8")
-    for name in faces.NAMES:
-        assert f"FACE_{name}[]" in text
 
 
 # --------------------------------------------------------------- lookup + resolve
