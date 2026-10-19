@@ -7,7 +7,14 @@ extern const uint8_t petBackground[] asm("_binary_assets_dsh_pet_background_bin_
 namespace pet {
 constexpr int W=168,N=W*W,FPS=40,X=36,Y=76;
 static uint8_t *indices=nullptr,*delta=nullptr;
-static uint16_t *a=nullptr,*b=nullptr,*last=nullptr,*from=nullptr;
+static uint16_t *last=nullptr,*from=nullptr;
+static uint16_t palette[256];
+// Optional, bounded PSRAM cache of lossless sparse XOR deltas. Repeated
+// animation frames no longer have to inflate zlib data from flash each time.
+constexpr uint32_t CACHE_LIMIT=6*1024*1024,MASK_BYTES=N/8;
+static uint8_t **deltaCache=nullptr;
+static uint32_t clipCacheBytes[13]={},clipCacheUsed[13]={},cacheClock=0;
+static std::atomic<uint32_t> cacheBytes{0},cacheHits{0},cacheMisses{0};
 static tinfl_decompressor inflaterStorage;
 static tinfl_decompressor *inflater=&inflaterStorage;
 static uint32_t clipOffset,frameOffset,dataOffset;
@@ -39,49 +46,114 @@ static bool init() {
   if(valid) return true;
 
   if(memcmp(petPack,"DSP1",4)||petPack[4]!=W||petPack[6]!=W||petPack[8]!=FPS) return false;
-  indices=(uint8_t*)alloc(N);
+  // Keep the hot decoder state in internal RAM. Removing the two RGB
+  // lookahead frames frees their space rather than adding another cache.
+  indices=(uint8_t*)heap_caps_malloc(N,MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
+  const bool internalIndices=indices!=nullptr;
+  if(!indices)indices=(uint8_t*)alloc(N);
   delta=(uint8_t*)heap_caps_malloc(N,MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
-  a=(uint16_t*)heap_caps_malloc(N*2,MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
-  internalFrame=a!=nullptr;
-  if(!a)a=(uint16_t*)alloc(N*2);
-  b=(uint16_t*)alloc(N*2);
-  last=(uint16_t*)alloc(N*2);from=(uint16_t*)alloc(N*2);
+  // Leave at least 64 KiB available for USB/audio and their runtime buffers.
+  if(heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT)>=N*2+65536)
+    last=(uint16_t*)heap_caps_malloc(N*2,MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
+  internalFrame=internalIndices&&last!=nullptr;
+  if(!last)last=(uint16_t*)alloc(N*2);
+  from=(uint16_t*)alloc(N*2);
 
-  if(!indices||!delta||!a||!b||!last||!from||!inflater) return false;
+  if(!indices||!delta||!last||!from||!inflater) return false;
   clipOffset=u32(petPack+16);frameOffset=u32(petPack+20);dataOffset=u32(petPack+24);
+  deltaCache=(uint8_t**)heap_caps_calloc(u32(petPack+12),sizeof(uint8_t*),MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
+  memcpy(palette,petPack+28,512);
+  for(auto &color:palette)color=__builtin_bswap16(color);
   memset(last,0,N*2);valid=true;return true;
+}
+static bool makeCacheRoom(uint32_t bytes) {
+  while(cacheBytes+bytes>CACHE_LIMIT||heap_caps_get_free_size(MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT)<bytes+512*1024) {
+    int victim=-1;
+    for(int i=0;i<13;++i)if(i!=int(action.load())&&clipCacheBytes[i]&&
+      (victim<0||clipCacheUsed[i]<clipCacheUsed[victim]))victim=i;
+    if(victim<0)return false;
+    uint32_t first=u32(petPack+clipOffset+victim*8),count=u32(petPack+clipOffset+victim*8+4);
+    // Reclaim a small tail batch, preserving the beginning of actions for
+    // state transitions. Whole-clip eviction made alternating clips thrash.
+    uint32_t released=0;
+    for(uint32_t i=first+count;i>first&&released<65536;) {
+      auto entry=deltaCache[--i];if(!entry)continue;
+      uint16_t packed;memcpy(&packed,entry,2);
+      uint32_t size=2+(packed?packed:N);
+      free(entry);deltaCache[i]=nullptr;released+=size;
+    }
+    cacheBytes.fetch_sub(released);clipCacheBytes[victim]-=released;
+  }
+  return true;
+}
+static void rememberDelta(uint32_t global,bool absolute) {
+  if(!deltaCache)return;
+  uint16_t packed=0;
+  if(!absolute) {
+    // This scratch is separate from delta and indices and will be replaced
+    // by colors() before composition. Bound even worst-case dense deltas.
+    memset(lcdFrameBytes,0,MASK_BYTES);
+    uint32_t end=MASK_BYTES;
+    for(int i=0;i<N;++i)if(delta[i]) {
+      lcdFrameBytes[i/8]|=1u<<(i%8);
+      if(end>=N) {end=N;break;}
+      lcdFrameBytes[end++]=delta[i];
+    }
+    if(end<N)packed=end;
+  }
+  uint32_t bytes=2+(packed?packed:N);
+  if(!makeCacheRoom(bytes))return;
+  auto entry=(uint8_t*)alloc(bytes);
+  if(!entry)return; // Cache is optional; ordinary decoding remains available.
+  memcpy(entry,&packed,2);memcpy(entry+2,packed?lcdFrameBytes:delta,bytes-2);
+  deltaCache[global]=entry;cacheBytes.fetch_add(bytes);
+  clipCacheBytes[action]+=bytes;clipCacheUsed[action]=++cacheClock;
 }
 static bool decode(uint32_t global,bool key) {
   uint32_t t=micros();
   auto entry=petPack+frameOffset+global*8;
   uint32_t size=u32(entry+4),offset=u32(entry);
-  size_t input=size&0x7fffffff,output=N;
-  tinfl_init(inflater);
-  auto result=tinfl_decompress(inflater,petPack+dataOffset+offset,&input,delta,delta,&output,
-    TINFL_FLAG_PARSE_ZLIB_HEADER|TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF);
-  if(result!=TINFL_STATUS_DONE||output!=N) {++decodeErrors;return false;}
-  if(key||(size&0x80000000)) memcpy(indices,delta,N);
-  else {
-    uint8_t row[W];
-    for(int y=0;y<W;++y) {
-      memcpy(row,indices+y*W,W);
-      for(int x=0;x<W;++x)row[x]^=delta[y*W+x];
-      memcpy(indices+y*W,row,W);
+  const bool absolute=key||(size&0x80000000);
+  uint16_t packed=0;
+  if(deltaCache&&deltaCache[global]) {
+    auto entry=deltaCache[global];memcpy(&packed,entry,2);
+    memcpy(delta,entry+2,packed?packed:N);
+    ++cacheHits;clipCacheUsed[action]=++cacheClock;
+  } else {
+    ++cacheMisses;
+    size_t input=size&0x7fffffff,output=N;
+    tinfl_init(inflater);
+    auto result=tinfl_decompress(inflater,petPack+dataOffset+offset,&input,delta,delta,&output,
+      TINFL_FLAG_PARSE_ZLIB_HEADER|TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF);
+    if(result!=TINFL_STATUS_DONE||output!=N) {++decodeErrors;return false;}
+    rememberDelta(global,absolute);
+  }
+  if(absolute) memcpy(indices,delta,N);
+  else if(packed) {
+    auto values=delta+MASK_BYTES;
+    for(int i=0;i<MASK_BYTES;++i) {
+      unsigned bits=delta[i];
+      while(bits) {indices[i*8+__builtin_ctz(bits)]^=*values++;bits&=bits-1;}
     }
+  }
+  else {
+    static_assert(N%4==0,"word-wise delta requires complete words");
+    auto dst=reinterpret_cast<uint32_t*>(indices);
+    auto src=reinterpret_cast<const uint32_t*>(delta);
+    for(int i=0;i<N/4;++i)dst[i]^=src[i];
   }
   decodeUs.fetch_add(micros()-t);
   return true;
 }
 static void colors(uint16_t *dest) {
   uint32_t t=micros();
-  // Reuse the internal composition buffer as indexed scratch before rendering.
-  // Contiguous PSRAM row writes avoid the original transpose cache misses.
-  memcpy(lcdFrameBytes,indices,N);
-  uint16_t palette[256],row[W];
-  memcpy(palette,petPack+28,512);
-  for(int i=0;i<256;++i)palette[i]=__builtin_bswap16(palette[i]);
+  // Delta scratch is no longer needed after decode. It provides a separate
+  // indexed source even when indices fell back to PSRAM, so output never
+  // overwrites its own input. Palette conversion writes the final frame once.
+  memcpy(delta,indices,N);
+  uint16_t row[W];
   for(int py=0;py<W;++py) {
-    for(int px=0;px<W;++px)row[px]=palette[lcdFrameBytes[px*W+(W-1-py)]];
+    for(int px=0;px<W;++px)row[px]=palette[delta[px*W+(W-1-py)]];
     memcpy(dest+py*W,row,W*2);
   }
   colorUs.fetch_add(micros()-t);
@@ -90,12 +162,7 @@ static uint32_t count() {return u32(petPack+clipOffset+action*8+4);}
 static void seek(uint32_t local) {
   uint32_t first=u32(petPack+clipOffset+action*8),key=local/FPS*FPS;
   for(uint32_t f=key;f<=local;++f) if(!decode(first+f,f==key))return;
-  colors(a);frame=local;
-  // Keep delta decoding state at the upcoming frame. Normal playback advances
-  // sequentially; missed deadlines seek from a bounded one-second keyframe.
-  uint32_t next=(local+1)%count();
-  if(next==0) decode(first,true);else decode(first+next,false);
-  colors(b);
+  frame=local;
 }
 static void start(uint32_t id,uint32_t now) {
   memcpy(from,last,N*2);action=id;began=now;transition=now;seek(0);
@@ -164,29 +231,23 @@ static void tick(uint32_t now,int current,bool animate,bool force=false) {
       uint32_t first=u32(petPack+clipOffset+action*8);
       uint32_t old=frame.load(),steps=(wanted+count()-old)%count();
       if(steps<=FPS) {
-        if(steps==1) {auto previous=a;a=b;b=previous;}
-        else {
-          // The decoder already contains old+1 (the lookahead frame). Replay
-          // only skipped deltas, never restart from a distant keyframe.
-          for(uint32_t i=2;i<=steps;++i) {
-            uint32_t local=(old+i)%count();decode(first+local,local==0);
-          }
-          colors(a);
+        // State now belongs to the displayed source frame, not a lookahead.
+        // Replay only the required deltas; missed frames keep real-time timing.
+        for(uint32_t i=1;i<=steps;++i) {
+          uint32_t local=(old+i)%count();decode(first+local,local==0);
         }
         frame=wanted;
-        uint32_t next=(wanted+1)%count();decode(first+next,next==0);colors(b);
       } else seek(wanted);
     }
   }
+  colors(reinterpret_cast<uint16_t*>(lcdFrameBytes));
   uint32_t blendStarted=micros();
   unsigned fade=min(256u,(now-transition)*256/220);
-  // Normal playback copies a complete precomputed motion frame. Only state
-  // changes blend against the last displayed image, avoiding empty frames.
-  if(fade>=256)memcpy(lcdFrameBytes,a,N*2);
-  else {
+  // Blend only transitions, directly in the final internal frame buffer.
+  if(fade<256) {
     uint16_t ar[W],fr[W],out[W];
     for(int y=0;y<W;++y) {
-      memcpy(ar,a+y*W,W*2);memcpy(fr,from+y*W,W*2);
+      memcpy(ar,lcdFrameBytes+y*W*2,W*2);memcpy(fr,from+y*W,W*2);
       for(int x=0;x<W;++x)
         out[x]=__builtin_bswap16(blend(__builtin_bswap16(fr[x]),__builtin_bswap16(ar[x]),fade));
       memcpy(lcdFrameBytes+y*W*2,out,W*2);
@@ -202,9 +263,11 @@ static void tick(uint32_t now,int current,bool animate,bool force=false) {
   for(int y=0;y<W;++y) {
     memcpy(oldRow,last+y*W,W*2);
     auto current=reinterpret_cast<const uint16_t*>(lcdFrameBytes)+y*W;
-    for(int x=0;x<W;++x)if(oldRow[x]!=current[x]) {
-      left=min(left,x);right=max(right,x);top=min(top,y);bottom=y;
-    }
+    if(memcmp(oldRow,current,W*2)==0)continue;
+    int lo=0,hi=W-1;
+    while(oldRow[lo]==current[lo])++lo;
+    while(oldRow[hi]==current[hi])--hi;
+    left=min(left,lo);right=max(right,hi);top=min(top,y);bottom=y;
   }
   if(right>=left&&testMode!=3) {
     // The shared buffer is sized for Emotion Ball (192 square), leaving room

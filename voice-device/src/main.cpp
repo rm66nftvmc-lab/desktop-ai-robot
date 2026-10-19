@@ -502,7 +502,7 @@ void loop() {
   pollButton();
   if (!connected && millis()-lastHello>=2000) {
     lastHello=millis();
-      sendJson(FRAME_HELLO,"{\"protocol\":1,\"firmware\":\"voice-device-1.23\"}");
+      sendJson(FRAME_HELLO,"{\"protocol\":1,\"firmware\":\"voice-device-1.25\"}");
   }
   if (connected && millis()-lastStatus>=3000) {
     lastStatus=millis();
@@ -517,6 +517,9 @@ void loop() {
     size_t used=strlen(status);
     snprintf(status+used-1,sizeof(status)-used+1,",\"pet_action\":%lu,\"pet_frame\":%lu,\"pet_random_count\":%lu,\"pet_decode_errors\":%lu,\"pet_decode_us\":%lu,\"pet_color_us\":%lu,\"pet_blend_us\":%lu,\"pet_internal_frames\":%u,\"screen_test\":%u,\"screen_test_hash\":%lu,\"pixel_writes\":%lu,\"lcd_spi_hz\":%lu}",
       (unsigned long)pet::action.load(),(unsigned long)pet::frame.load(),(unsigned long)pet::randomCount.load(),(unsigned long)pet::decodeErrors.load(),(unsigned long)pet::decodeUs.load(),(unsigned long)pet::colorUs.load(),(unsigned long)pet::blendUs.load(),pet::internalFrame.load()?1u:0u,pet::testMode.load(),(unsigned long)pet::testHash.load(),(unsigned long)lcdPixelWrites.load(),(unsigned long)lcdBusHz.load());
+    used=strlen(status);
+    snprintf(status+used-1,sizeof(status)-used+1,",\"pet_cache_bytes\":%lu,\"pet_cache_hits\":%lu,\"pet_cache_misses\":%lu}",
+      (unsigned long)pet::cacheBytes.load(),(unsigned long)pet::cacheHits.load(),(unsigned long)pet::cacheMisses.load());
     sendJson(FRAME_STATUS,status);
   }
   pollMicrophone();

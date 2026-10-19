@@ -61,7 +61,8 @@ def main():
                         record = {'phase': phase, **d}
                         log.write(json.dumps(record)+'\n');log.flush()
                         fields = ['uptime_ms','screen_test','screen_test_hash','pixel_writes',
-                                  'pet_frame','display_theme','animation_enabled','bad_crc','lcd_spi_hz','presents','source_updates','pet_decode_us']
+                                  'pet_frame','display_theme','animation_enabled','bad_crc','lcd_spi_hz','presents','source_updates','pet_decode_us',
+                                  'pet_cache_bytes','pet_cache_hits','pet_cache_misses']
                         print(json.dumps({'phase':phase, **{k:d.get(k) for k in fields}}),flush=True)
                         if phase in ('hold','repeat','compute-only') and d.get('screen_test') == {'hold':1,'repeat':2,'compute-only':3}[phase]:
                             if baseline_hash is None:
@@ -93,6 +94,8 @@ def main():
                         raise RuntimeError('Unknown display test phase')
                     if desired != phase:
                         send(protocol.SCREEN_TEST, bytes(modes[desired]))
+                        if desired.startswith('motion-'):
+                            baseline_hash=None
                         phase=desired;prior=None
                         print('REQUESTED',phase,flush=True)
     finally:
