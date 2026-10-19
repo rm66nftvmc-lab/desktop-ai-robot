@@ -282,10 +282,10 @@ static void lcdDrawFace(int index) {
 static void lcdService() {
   int theme=pendingTheme.exchange(-1);
   if(theme>=1 && theme<=2 && theme!=displayTheme) {
-    // ST7789V FRCTRL2: retain dot inversion; pet scan code 0 requests the
-    // datasheet's nominal 119 Hz (default porches), near 3 scans per 40-fps
-    // motion frame. This is a register request, not measured panel timing.
-    const uint8_t scan=theme==2?0x00:0x0F;
+    // Longer jumper-wire display bus: use a conservative pet write clock.
+    // Emotion Ball keeps its previously validated 40 MHz setting.
+    lcdSpi=SPISettings(theme==2?26666666:40000000,MSBFIRST,SPI_MODE0);
+    const uint8_t scan=0x0F; // Restore default panel timing after dim high-scan trials.
     lcdCommand(0xC6,&scan,1);
     displayTheme=theme;
     if(theme==2)pet::enter(millis());
@@ -492,7 +492,7 @@ void loop() {
   pollButton();
   if (!connected && millis()-lastHello>=2000) {
     lastHello=millis();
-      sendJson(FRAME_HELLO,"{\"protocol\":1,\"firmware\":\"voice-device-1.17\"}");
+      sendJson(FRAME_HELLO,"{\"protocol\":1,\"firmware\":\"voice-device-1.20\"}");
   }
   if (connected && millis()-lastStatus>=3000) {
     lastStatus=millis();

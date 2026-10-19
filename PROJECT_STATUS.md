@@ -2,11 +2,25 @@
 
 Last updated: 2026-10-19
 
+## DSH Pet continuous rectangle transport (2026-10-19)
+
+- User confirmed 1.16 stutter gone but uncomfortable flicker remained. 1.17 high scan reduced flicker but made the panel nearly unreadable; 1.18 intermediate scan restored brightness but retained obvious flicker. Both scan experiments are superseded.
+- Private diagnostic **1.19** restored FRCTRL2 0x0F and held one identical pose while retransmitting it 40 times/s. Telemetry confirmed fixed frame 206 while presents increased 120 per 3 seconds. User still observed slight flicker. This rules out changing animation content as the sole cause, but does not identify whether bus integrity, panel scan/write interaction or power is responsible.
+- Current **1.20** restores normal pause semantics (paused means no ongoing redraw), uses default FRCTRL2 0x0F for both themes, and lowers only DSH Pet SPI from 40 to approximately **26.67 MHz**. Emotion Ball retains 40 MHz.
+- DSH Pet now finds the final changed bounding rectangle and streams it with one RAMWR/CS transaction, packing up to 16 rows per internal-memory transfer. It does not clear the region. Static pixels within the rectangle are copied unchanged. This replaces dozens of independently addressed tile runs and should reduce fragmented old/new scanout; no TE synchronization is available, so no guarantee of tear-free output is made.
+- An initial 20 MHz rectangle trial acknowledged 320/320 audio frames but fell to approximately 32 presentations/s during speech, so it was not retained. The final approximately 26.67 MHz build acknowledged **320/320 audio frames**, CRC 0, continuous uptime and animated speaking. It measured approximately **37 presentations/s during speech and 39/s afterward**. The source motion remains 40 fps and original duration; small frame skips remain possible. Do not claim 40 sustained during speech for this build.
+- Build and sector patch hash verification passed. Bridge reconnected on **voice-device-1.20**, actual theme 2, animation restored. The temporary fixed-pose repeat diagnostic is removed. Physical comparison of brightness, flicker and smoothness remains pending.
+
+## DSH Pet scan/brightness compromise (2026-10-19)
+
+- Live firmware **1.18** replaces the rejected high-scan 0x00 profile with FRCTRL2 **0x08** for DSH Pet (datasheet nominal 78 Hz at default porches); Emotion Ball still requests 0x0F. This is an empirical intermediate setting, not a measured scan frequency. Motion is unchanged at 40 fps.
+- Built and sector-flashed with verified hashes. Bridge reconnected on 1.18, actual theme 2, animation enabled, measured 40 fps, CRC/decode errors zero. Physical feedback: brightness recovered but flicker remained obvious; this compromise was rejected. If still too dim, restore default 0x0F before further transfer-path changes; do not increase analogue panel drive voltages to compensate.
+
 ## DSH Pet panel-scan experiment (2026-10-19)
 
 - Firmware **1.17** changes only the theme-specific ST7789V FRCTRL2 register: DSH Pet requests 0x00, Emotion Ball restores the default 0x0F. Dot-inversion bits stay unchanged. Source artwork, 40-fps playback, SPI clock, gamma, state transitions and audio gain remain unchanged to isolate the comparison.
 - Datasheet: https://newhavendisplay.com/content/datasheets/ST7789V.pdf, section 9.2.16. With default porches, the documented nominal scan rates for these codes are 119/60 Hz. These are controller requests, not measured physical panel rates; no TE synchronization signal or readback is wired. The change may reduce scan/presentation beat visibility but is not proof of a flicker cure.
-- Built and sector-patched with hash verification. Audio playback passed with 320/320 acknowledgements, speaking animation active, continuous uptime and CRC 0. Bridge reconnected on 1.17; theme switching measured 60 fps for Emotion Ball and 40 fps for DSH Pet with zero decode errors. Physical comparison remains pending. Keep 1.16 as the accepted smooth-playback baseline if the panel experiment worsens appearance. A local 1.16 binary backup is outside Git.
+- Built and sector-patched with hash verification. Audio playback passed with 320/320 acknowledgements, speaking animation active, continuous uptime and CRC 0. Bridge reconnected on 1.17; theme switching measured 60 fps for Emotion Ball and 40 fps for DSH Pet with zero decode errors. Physical feedback rejected 1.17: flicker reduced, but the panel became almost unreadably dim. The 0x00 setting must not remain the final profile. Keep 1.16 as the accepted smooth-playback baseline if the panel experiment worsens appearance. A local 1.16 binary backup is outside Git.
 
 ## DSH Pet precomputed motion playback (2026-10-19)
 

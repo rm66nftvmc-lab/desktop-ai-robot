@@ -170,17 +170,30 @@ static void tick(uint32_t now,int current,bool animate,bool force=false) {
   blendUs=micros()-blendStarted;
   lcdComposeUs=micros()-renderStarted;
   const uint32_t pushStarted=micros();
-  // Final opaque tiles only: no clearing pass, no empty intermediate frame.
-  for(int y=0;y<W;y+=8) for(int x=0;x<W;) {
-    auto changed=[&](int xx) {
-      for(int yy=y;yy<y+8;++yy)
-        if(memcmp(reinterpret_cast<uint8_t*>(last)+(yy*W+xx)*2,lcdFrameBytes+(yy*W+xx)*2,16))return true;
-      return false;
-    };
-    if(!changed(x)){x+=8;continue;}
-    int left=x;do{x+=8;}while(x<W&&changed(x));
-    lcdSetWindow(X+left,Y+y,X+x-1,Y+y+7);lcdBeginPixels();
-    for(int yy=y;yy<y+8;++yy) SPI.writeBytes(lcdFrameBytes+(yy*W+left)*2,(x-left)*2);
+  // Find the final dirty rectangle in internal row scratch. One RAMWR stream
+  // avoids a patchwork of separately addressed old/new tiles during scanout.
+  int left=W,right=-1,top=W,bottom=-1;
+  uint16_t oldRow[W];
+  for(int y=0;y<W;++y) {
+    memcpy(oldRow,last+y*W,W*2);
+    auto current=reinterpret_cast<const uint16_t*>(lcdFrameBytes)+y*W;
+    for(int x=0;x<W;++x)if(oldRow[x]!=current[x]) {
+      left=min(left,x);right=max(right,x);top=min(top,y);bottom=y;
+    }
+  }
+  if(right>=left) {
+    // The shared buffer is sized for Emotion Ball (192 square), leaving room
+    // after this 168-square image for a packed 16-row internal transfer strip.
+    constexpr int ROWS=16;
+    static_assert(N*2+W*ROWS*2<=192*192*2,"transfer scratch exceeds shared buffer");
+    auto strip=lcdFrameBytes+N*2;
+    const int bytes=(right-left+1)*2;
+    lcdSetWindow(X+left,Y+top,X+right,Y+bottom);lcdBeginPixels();
+    for(int y=top;y<=bottom;y+=ROWS) {
+      int rows=min(ROWS,bottom-y+1);
+      for(int r=0;r<rows;++r)memcpy(strip+r*bytes,lcdFrameBytes+((y+r)*W+left)*2,bytes);
+      SPI.writeBytes(strip,rows*bytes);
+    }
     lcdEndPixels();
   }
 
