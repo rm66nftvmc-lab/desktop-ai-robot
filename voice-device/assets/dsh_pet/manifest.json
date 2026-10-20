@@ -132,6 +132,7 @@
       "seconds": 10.05
     }
   ],
-  "sha256": "c1d2b85187f9d421d350a3f98e43b0e1f271b299efd6ab140a3624be885bfb16",
-  "bytes": 15838813
+  "sha256": "f3a40f20d2007a67b87513289dcb944b899f433bc48a823cfc2942aef9db7055",
+  "bytes": 14788881,
+  "compression": "lossless per-frame minimum of zlib level 9 strategies"
 }

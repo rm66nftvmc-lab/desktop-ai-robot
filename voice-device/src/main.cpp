@@ -1,5 +1,9 @@
 #include <Arduino.h>
 #include <SPI.h>
+#include <WiFi.h>
+#include <Preferences.h>
+#include <WebSocketsClient.h>
+#include <ArduinoJson.h>
 #include <driver/i2s.h>
 #include <esp_system.h>
 #include <esp_heap_caps.h>
@@ -52,8 +56,23 @@ static uint16_t crcStep(uint16_t crc, const uint8_t *data, size_t length) {
   return crc;
 }
 
+static Preferences networkPrefs;
+static WebSocketsClient deviceSocket;
+static String networkSsid,networkPassword,networkHost,networkToken,networkHeaders;
+static uint16_t networkPort=8788;
+static bool socketStarted=false,networkSelected=false;
+static uint32_t wifiAttempt=0;
+static uint8_t networkRx[8192];
+static size_t networkRead=0,networkWrite=0;
+static void resetLink() {
+  connected=false; listening=false; playing=false; rxLength=0;
+  networkRead=networkWrite=0;
+  if(speakerReady)i2s_zero_dma_buffer(I2S_NUM_1);
+  lastHello=0;
+}
+
 static void sendFrame(uint8_t kind, const uint8_t *payload=nullptr, uint16_t length=0) {
-  if (length>MAX_PAYLOAD || !Serial) return;
+  if (length>MAX_PAYLOAD || (!networkSelected && !Serial)) return;
   uint8_t header[7]={0xA5,0x5A,kind,
     static_cast<uint8_t>(txSequence),static_cast<uint8_t>(txSequence>>8),
     static_cast<uint8_t>(length),static_cast<uint8_t>(length>>8)};
@@ -61,9 +80,17 @@ static void sendFrame(uint8_t kind, const uint8_t *payload=nullptr, uint16_t len
   uint16_t crc=crcStep(0xFFFF,header+2,5);
   if (length) crc=crcStep(crc,payload,length);
   uint8_t trailer[2]={static_cast<uint8_t>(crc),static_cast<uint8_t>(crc>>8)};
-  Serial.write(header,sizeof(header));
-  if (length) Serial.write(payload,length);
-  Serial.write(trailer,sizeof(trailer));
+  if(networkSelected) {
+    if(!deviceSocket.isConnected())return;
+    uint8_t frame[9+MAX_PAYLOAD];
+    memcpy(frame,header,7);if(length)memcpy(frame+7,payload,length);
+    memcpy(frame+7+length,trailer,2);
+    if(!deviceSocket.sendBIN(frame,length+9))resetLink();
+  } else {
+    Serial.write(header,sizeof(header));
+    if (length) Serial.write(payload,length);
+    Serial.write(trailer,sizeof(trailer));
+  }
 }
 
 static void sendJson(uint8_t kind,const char *json) {
@@ -394,7 +421,35 @@ static bool startSpeaker() {
 static void pollButton();
 
 static void handleFrame(uint8_t kind,const uint8_t *payload,uint16_t length) {
-  if (kind==FRAME_WELCOME && length==14 && memcmp(payload,"{\"protocol\":1}",14)==0) {
+  if(kind==18 && !networkSelected && !listening && !playing) {
+    bool animated=animationEnabled.exchange(false);delay(100);
+    WiFi.mode(WIFI_STA);WiFi.setTxPower(WIFI_POWER_8_5dBm);
+    int count=WiFi.scanNetworks(false,true,true,120);
+    JsonDocument report;JsonArray list=report["networks"].to<JsonArray>();
+    for(int i=0;i<count && i<12;i++) {
+      JsonObject item=list.add<JsonObject>();item["ssid"]=WiFi.SSID(i);item["rssi"]=WiFi.RSSI(i);
+    }
+    WiFi.scanDelete();animationEnabled=animated;
+    char result[1024];size_t n=serializeJson(report,result,sizeof(result));
+    if(n<sizeof(result))sendFrame(19,reinterpret_cast<uint8_t*>(result),n);
+  } else if(kind==16 && !networkSelected && !listening && !playing) {
+    JsonDocument config;
+    bool ok=!deserializeJson(config,payload,length);
+    String ssid=config["ssid"] | "",password=config["password"] | "";
+    String host=config["host"] | "",token=config["token"] | "";
+    int port=config["port"] | 8788;
+    IPAddress address;
+    ok=ok && ssid.length()>0 && ssid.length()<=32 && password.length()<=63
+      && address.fromString(host) && token.length()>=32 && token.length()<=128
+      && port>=1024 && port<=65535;
+    if(ok) {
+      ok=networkPrefs.putString("ssid",ssid)>0 && networkPrefs.putString("pass",password)==password.length()
+        && networkPrefs.putString("host",host)>0 && networkPrefs.putString("token",token)>0
+        && networkPrefs.putUShort("port",port)>0;
+    }
+    const uint8_t result=ok?1:0;sendFrame(17,&result,1);
+    if(ok){delay(100);ESP.restart();}
+  } else if (kind==FRAME_WELCOME && length==14 && memcmp(payload,"{\"protocol\":1}",14)==0) {
     connected=true; lastHost=millis(); lcdDrawFace(FACE_ID_READY);
   } else if (kind==FRAME_FACE && connected && length==1) {
     lcdDrawFace(listening?FACE_ID_LISTEN:payload[0]);
@@ -438,8 +493,8 @@ static void handleFrame(uint8_t kind,const uint8_t *payload,uint16_t length) {
 
 static void pollHost() {
   const uint32_t started=micros();
-  while (Serial.available()) {
-    int incoming=Serial.read();
+  while (networkSelected ? networkRead!=networkWrite : Serial.available()>0) {
+    int incoming=networkSelected ? networkRx[(networkRead++)%sizeof(networkRx)] : Serial.read();
     if (incoming<0) break;
     if (rxLength>=sizeof(rxBuffer)) rxLength=0;
     rxBuffer[rxLength++]=static_cast<uint8_t>(incoming);
@@ -505,10 +560,42 @@ static void pollMicrophone() {
   if (pairs) sendFrame(FRAME_AUDIO_UP,reinterpret_cast<const uint8_t *>(mono),pairs*2);
 }
 
+static void pollNetwork() {
+  bool selected=millis()>8000 && !Serial && !networkSsid.isEmpty();
+  if(selected!=networkSelected) {
+    resetLink();networkSelected=selected;
+    if(!selected && socketStarted){deviceSocket.disconnect();WiFi.disconnect(true);socketStarted=false;}
+  }
+  if(!networkSelected)return;
+  if(!socketStarted) {
+    WiFi.mode(WIFI_STA);WiFi.setTxPower(WIFI_POWER_8_5dBm);WiFi.setSleep(false);
+    WiFi.begin(networkSsid.c_str(),networkPassword.c_str());wifiAttempt=millis();
+    networkHeaders="Authorization: Bearer "+networkToken;
+    deviceSocket.begin(networkHost,networkPort,"/device");
+    deviceSocket.setExtraHeaders(networkHeaders.c_str());
+    deviceSocket.setReconnectInterval(3000);
+    deviceSocket.onEvent([](WStype_t type,uint8_t *data,size_t length){
+      if(type==WStype_DISCONNECTED || type==WStype_CONNECTED)resetLink();
+      if(type==WStype_BIN) {
+        if(length>sizeof(networkRx)-(networkWrite-networkRead)){deviceSocket.disconnect();resetLink();return;}
+        for(size_t i=0;i<length;i++)networkRx[(networkWrite++)%sizeof(networkRx)]=data[i];
+      }
+    });
+    socketStarted=true;
+  }
+  if(WiFi.status()==WL_CONNECTED)deviceSocket.loop();
+  else if(millis()-wifiAttempt>15000){WiFi.reconnect();wifiAttempt=millis();}
+}
+
 void setup() {
   pinMode(KEY_PIN,INPUT_PULLUP);
   Serial.setRxBufferSize(8192);
   Serial.begin(115200);
+  networkPrefs.begin("bridge-net",false);
+  networkSsid=networkPrefs.getString("ssid","");networkPassword=networkPrefs.getString("pass","");
+  networkHost=networkPrefs.getString("host","");networkToken=networkPrefs.getString("token","");
+  networkPort=networkPrefs.getUShort("port",8788);
+  // USB remains usable even if the configured wireless network is unavailable.
   micReady=startMicrophone();
   speakerReady=startSpeaker();
   lcdInit();
@@ -519,6 +606,7 @@ void setup() {
 }
 
 void loop() {
+  pollNetwork();
   pollHost();
   if (connected && millis()-lastHost>5000) {
     connected=false; listening=false; playing=false; lcdDrawFace(FACE_ID_SLEEP);
@@ -527,7 +615,7 @@ void loop() {
   if (!connected && millis()-lastHello>=2000) {
     lastHello=millis();
       char hello[256];
-      snprintf(hello,sizeof(hello),"{\"protocol\":1,\"firmware\":\"voice-device-1.52\",\"display_theme\":%u,\"animation_enabled\":%s,\"boot_animation\":%s,\"pet_action\":%lu,\"pet_frame\":%lu,\"presents\":%lu,\"uptime_ms\":%lu}",
+      snprintf(hello,sizeof(hello),"{\"protocol\":1,\"firmware\":\"voice-device-1.55\",\"display_theme\":%u,\"animation_enabled\":%s,\"boot_animation\":%s,\"pet_action\":%lu,\"pet_frame\":%lu,\"presents\":%lu,\"uptime_ms\":%lu}",
         displayTheme.load(),animationEnabled?"true":"false",pet::bootGreeting?"true":"false",
         (unsigned long)pet::action.load(),(unsigned long)pet::frame.load(),(unsigned long)lcdPresents.load(),(unsigned long)millis());
       sendJson(FRAME_HELLO,hello);
@@ -551,6 +639,10 @@ void loop() {
     used=strlen(status);
     snprintf(status+used-1,sizeof(status)-used+1,",\"pet_pixel_bytes\":%lu,\"pet_windows\":%lu,\"lcd_tx_errors\":%lu}",
       (unsigned long)pet::pixelBytes.load(),(unsigned long)pet::writeWindows.load(),(unsigned long)lcdTxErrors.load());
+    used=strlen(status);
+    snprintf(status+used-1,sizeof(status)-used+1,",\"transport\":\"%s\",\"wifi_rssi\":%d,\"free_internal\":%lu}",
+      networkSelected?"wifi":"usb",WiFi.status()==WL_CONNECTED?WiFi.RSSI():0,
+      (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT));
     sendJson(FRAME_STATUS,status);
   }
   pollMicrophone();

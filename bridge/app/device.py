@@ -40,7 +40,8 @@ def find_port() -> str | None:
 class DeviceLink:
     MAX_CAPTURE_BYTES = 60 * 16000 * 2
 
-    def __init__(self, on_capture=None, on_listen_start=None, *, audio_output=None, on_disconnect=None):
+    def __init__(self, on_capture=None, on_listen_start=None, *, audio_output=None, on_disconnect=None, network=None):
+        self.network = network
         self.audio_output = audio_output if audio_output is not None else AudioOutput()
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -297,6 +298,8 @@ class DeviceLink:
             except (ValueError, UnicodeDecodeError):
                 return sequence
             self._update(
+                wifi_rssi=status.get("wifi_rssi"),
+                free_internal=status.get("free_internal"),
                 listening=bool(status.get("listening", False)),
                 uptime_ms=status.get("uptime_ms"),
                 speaker_ready=status.get("speaker_ready"),
@@ -368,15 +371,16 @@ class DeviceLink:
 
     def _run(self) -> None:
         while not self._stop.is_set():
-            name = find_port()
-            self._update(present=bool(name), port=name)
+            network_port = self.network.take() if self.network else None
+            name = "Wi-Fi" if network_port else find_port()
+            self._update(present=bool(name), port=name, transport="wifi" if network_port else "usb")
             if not name:
                 self._connection_lost()
                 self.set_face(faces.SLEEP)
                 self._stop.wait(1)
                 continue
             try:
-                with open_device_port(name) as port:
+                with (network_port if network_port else open_device_port(name)) as port:
                     parser = protocol.FrameParser()
                     sequence = 0
                     # Some USB drivers reset the chip even with preconfigured

@@ -11,7 +11,7 @@ import struct
 import subprocess
 import urllib.parse
 import urllib.request
-import zlib
+from repack_dsh_pet import compress_delta
 
 import cv2
 import numpy as np
@@ -129,7 +129,7 @@ def build(cache, out):
             indices = np.ascontiguousarray(indices[:, ::-1].T)
             key = j % FPS == 0
             delta = indices if key else np.bitwise_xor(indices, previous)
-            packed = zlib.compress(delta.tobytes(), 9)
+            packed = compress_delta(delta.tobytes())
             table.append((len(payloads), len(packed) | (0x80000000 if key else 0)))
             payloads.extend(packed)
             previous = indices.copy()
@@ -146,6 +146,7 @@ def build(cache, out):
     (out/'animations.bin').write_bytes(pack)
     manifest = {'source': SOURCE, 'revision': SHA, 'fps':FPS, 'size':SIZE,
         'interpolation':'offline bidirectional optical-flow resampling; source duration retained',
+        'compression':'lossless per-frame minimum of zlib level 9 strategies',
         'source_fps':24, 'display_gamma':.85,
         'background': {'stage_offset_y': -20, 'lcd_attribution_text': False,
                        'attribution': 'Bridge theme panel and NOTICE.md'},

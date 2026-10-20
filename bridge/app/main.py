@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .device import DeviceLink
+from .network_device import NetworkDevices
 from .audio_output import AudioOutput
 from .hermes import HermesWorker
 from .harness import HarnessWorker
@@ -129,8 +130,9 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
     harness = harness_worker or HarnessWorker(database, data_dir)
     conversations = Conversations(database, hermes, harness)
     audio_output = AudioOutput(data_dir)
+    network = NetworkDevices(data_dir)
     device = DeviceLink(speech.enqueue, lambda generation: voice.on_listen_start(generation),
-                        audio_output=audio_output, on_disconnect=lambda: voice.on_device_disconnect())
+                        audio_output=audio_output, on_disconnect=lambda: voice.on_device_disconnect(), network=network)
     theme = get_setting(database, 'display_theme')
     if theme not in ('qiuqiu', 'dsh_pet'):
         theme = 'dsh_pet'
@@ -164,6 +166,7 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
         except (OSError, ValueError):
             logger.exception("Could not start optional Harness service")
         speech.start()
+        network.start()
         device.start()
         hermes.start()
         harness.start()
@@ -171,6 +174,7 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
         try:
             yield
         finally:
+            network.stop()
             device.stop()
             speech.stop()
             hermes.stop()
@@ -253,6 +257,7 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
             "maintenance": maintenance.snapshot(),
             "playback": playback.snapshot(),
             "device": device.snapshot(),
+            "device_network": network.snapshot(),
             "speech": speech.snapshot(),
             "voice": voice.snapshot(),
             "audio_output": audio_output.snapshot(),

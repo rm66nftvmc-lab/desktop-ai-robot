@@ -406,3 +406,18 @@ Runtime data, access keys, API keys, local databases, logs, virtual environments
 
 - Keep the KAC screen on 3V3. ST7789V chip supply specifications do not establish the module VCC rating; no module schematic or verified 5 V regulator has been found. The photographed Q1 alone is not evidence of a regulator. Do not test 5 V merely because the high-scan diagnostic is dim.
 - User asks whether background causes flicker. Current idle asset border is constant and no full-white source frame was found, but content-dependent panel behavior / perceived contrast remains possible. A uniform-background comparison with identical motion, scan and presentation rate is a useful next test; it has not yet been performed.
+
+
+## 2026-10-20：局域网无线 Bridge 开发中（固件 1.54）
+
+- 用户授权实现同一 Wi-Fi 连接 Bridge，保留 USB、当前声音和全部动画，实物验收后同步 GitHub。
+- 新增独立设备 WebSocket 监听器、独立随机令牌、USB/网络统一帧处理。网页仍保持原 loopback/Tailscale 访问方式；无线端口只处理设备二进制协议，不提供网页或智能体 API。
+- 固件保存配网到 NVS；USB 主机存在时走 USB，离开电脑 USB 后主动连接配置的局域网 Bridge；断线清空旧录音与播放，重连不重投旧问题。
+- `scripts/configure_device_wifi.py` 本地隐藏输入密码；`scripts/enable_device_wifi_firewall.ps1` 限定程序、局域网接口、本地地址和 LocalSubnet，需管理员运行。
+- 动画包无损重压缩从 15,838,813 减至 14,788,881 字节；5,226 帧逐帧验证解压字节一致，13 动作、显示尺寸、原播放时间和音色均保留。1.54 编译 Flash 15,918,497 / 16,711,680 字节。
+- 软件检查：154 项后端测试与 19 项网页状态测试通过；包含真实本机 WebSocket 鉴权、拒绝浏览器 Origin、录音上传/回调、播放下发与 ACK。
+- 1.53 完整刷写并全镜像 digest 校验成功；初次主动 Wi-Fi 扫描发生复位，随后 STATUS reset_reason=9（欠压）。因此 1.54 降为 8.5 dBm、被动扫描、扫描时暂时停止动画计算，Wi-Fi 初始化尽量先于可选显示缓存。
+- 当前阻碍：电脑侧仅扫描到 5 GHz 网络；主控 2.4 GHz 扫描、无线音质/按键路由、重连、USB 回退仍需实测。防火墙添加返回“拒绝访问”，须用户管理员执行准备好的脚本。无线验收前不标记完成。
+- Wi-Fi 密码及设备令牌只在私有配置/NVS，禁止提交公开仓库。当前首版 ws 在可信局域网明文通信，无公网转发。
+
+- 后续实测：1.54 被动低功率扫描仍触发欠压复位。1.55 延后无线初始化，开机保留 8 秒 USB 接管窗口，避免配置网络后破坏 USB 恢复。1.55 已补丁烧录并核对全部修改区 hash，已通过 USB 配网确认；Bridge 已重启，连接 COM9、主题 DSH、解码错误 0，无线监听 configured/listening 均 true。正在等待用户执行管理员防火墙脚本并改用充电头供电；无线验收尚未完成。
