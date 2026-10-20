@@ -262,3 +262,7 @@ Software image level rises from 90% to 95% at user request. The selected 90 Hz s
 ### 1.51 action transitions restored
 
 At user request, `ACTION_CROSSFADE=true` restores the 220 ms eased opaque action blend after the direct-cut trial felt abrupt. The selected 90 Hz settings and 100% image level stay unchanged. Flicker root cause remains unresolved.
+
+### 1.52 raised stage
+
+The DSH Pet stage moves up 20 logical pixels to sit under the character's feet. Removed the LCD bottom text; repository attribution remains in the Bridge panel, LICENSE and NOTICE. Rebuilt all composited clips/background consistently, keeping 13 x 402 frames, source durations, 90 Hz settings, 100% image level, eased transitions and character voice binding.

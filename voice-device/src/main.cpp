@@ -527,7 +527,7 @@ void loop() {
   if (!connected && millis()-lastHello>=2000) {
     lastHello=millis();
       char hello[256];
-      snprintf(hello,sizeof(hello),"{\"protocol\":1,\"firmware\":\"voice-device-1.51\",\"display_theme\":%u,\"animation_enabled\":%s,\"boot_animation\":%s,\"pet_action\":%lu,\"pet_frame\":%lu,\"presents\":%lu,\"uptime_ms\":%lu}",
+      snprintf(hello,sizeof(hello),"{\"protocol\":1,\"firmware\":\"voice-device-1.52\",\"display_theme\":%u,\"animation_enabled\":%s,\"boot_animation\":%s,\"pet_action\":%lu,\"pet_frame\":%lu,\"presents\":%lu,\"uptime_ms\":%lu}",
         displayTheme.load(),animationEnabled?"true":"false",pet::bootGreeting?"true":"false",
         (unsigned long)pet::action.load(),(unsigned long)pet::frame.load(),(unsigned long)lcdPresents.load(),(unsigned long)millis());
       sendJson(FRAME_HELLO,hello);

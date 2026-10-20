@@ -2,6 +2,12 @@
 
 Last updated: 2026-10-20
 
+## Raised DSH Pet stage and LCD text removal (2026-10-20)
+
+- User requests a higher background stage so the character appears to stand on it, and removal of the bottom text line. Generator raises both stage ellipses by 20 logical pixels (top 208 -> 188), removes the LCD text draw, and keeps the source attribution in Bridge's theme panel, LICENSE and NOTICE.
+- Regenerated every composited frame/background consistently: 13 clips x 402 frames, 168-square region, 40 fps source timeline and all original durations/action bindings retained. Manifest records the new background layout, attribution location and pack hash. Contact-sheet preview is shown in logical orientation.
+- Firmware **1.52** changes only the embedded art and version. Selected 90 Hz settings, 100% image level, eased transitions, paired voices and Emotion Ball are retained. Build fits Flash (16,371,237 / 16,711,680 bytes); three asset/theme tests passed. Exact decoded preview shows feet aligned with the raised stage, no bottom text. All four bounded upload chunks passed their hashes, followed by a full 16,371,600-byte application flash digest match. Updated the private verified-flash baseline only after that full verification; Bridge restored and reconnected on 1.52, DSH Pet/Paimon binding retained, animation counters advance with decode errors/USB CRC 0. Physical stage-position feedback is optional; preview was visually checked.
+
 ## Character-bound voices and unified audition panel (2026-10-20)
 
 - User requests DSH Pet -> Paimon, Emotion Ball -> local Ball Mandarin/English, removal of Ball Cantonese, and all voice audition controls moved into the display selector panel. Backend theme selection now sets/persists the matching voice under a lock, stops previous playback and queues the theme only after voice selection succeeds. App construction restores the binding without starting models; lifespan starts the selected engine. Legacy independent voice API rejects choices inconsistent with the selected theme.

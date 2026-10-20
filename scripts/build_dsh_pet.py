@@ -38,9 +38,10 @@ def background():
     for x, y in [(25, 38), (82, 20), (225, 55), (292, 94), (42, 112)]:
         d.line((x-2, y, x+2, y), fill=(141, 154, 184))
         d.line((x, y-2, x, y+2), fill=(141, 154, 184))
-    d.ellipse((55, 208, 268, 239), fill=(148, 138, 151))
-    d.ellipse((62, 208, 261, 229), fill=(183, 163, 165))
-    d.text((69, 232), 'github.com/PC2005-cloud/dsh-pet', fill=(199, 202, 217), font_size=9)
+    # Raise the stage under the character's feet. Attribution lives in the
+    # Bridge theme panel and NOTICE rather than a line across the LCD image.
+    d.ellipse((55, 188, 268, 219), fill=(148, 138, 151))
+    d.ellipse((62, 188, 261, 209), fill=(183, 163, 165))
     return im
 
 
@@ -133,7 +134,7 @@ def build(cache, out):
             payloads.extend(packed)
             previous = indices.copy()
             if j == count//2:
-                preview.append(Image.fromarray(colors[indices].astype(np.uint8)).resize((168,168)))
+                preview.append(Image.fromarray(np.rot90(colors[indices].astype(np.uint8), -1)).resize((168,168)))
             total += 1
         clips.append((start, total-start))
         print(f'{clip_id}: {name}: {total-start} frames, total {len(payloads)/1048576:.2f} MiB', flush=True)
@@ -145,7 +146,11 @@ def build(cache, out):
     (out/'animations.bin').write_bytes(pack)
     manifest = {'source': SOURCE, 'revision': SHA, 'fps':FPS, 'size':SIZE,
         'interpolation':'offline bidirectional optical-flow resampling; source duration retained',
-        'source_fps':24, 'display_gamma':.85, 'random_actions': list(range(5,13)), 'idle_gap_ms':[8000,22000],
+        'source_fps':24, 'display_gamma':.85,
+        'background': {'stage_offset_y': -20, 'lcd_attribution_text': False,
+                       'attribution': 'Bridge theme panel and NOTICE.md'},
+        'rotation': 'pre-rotated at pack time; runtime palette read is sequential (no 168-byte column stride)',
+        'random_actions': list(range(5,13)), 'idle_gap_ms':[8000,22000],
         'clips':[dict(source_meta[i], first=first, frames=count, seconds=count/FPS) for i,(first,count) in enumerate(clips)],
         'sha256':hashlib.sha256(pack).hexdigest(), 'bytes':len(pack)}
     (out/'manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')

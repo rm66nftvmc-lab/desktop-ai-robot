@@ -4,7 +4,14 @@
   "fps": 40,
   "size": 168,
   "interpolation": "offline bidirectional optical-flow resampling; source duration retained",
+  "source_fps": 24,
   "display_gamma": 0.85,
+  "background": {
+    "stage_offset_y": -20,
+    "lcd_attribution_text": false,
+    "attribution": "Bridge theme panel and NOTICE.md"
+  },
+  "rotation": "pre-rotated at pack time; runtime palette read is sequential (no 168-byte column stride)",
   "random_actions": [
     5,
     6,
@@ -125,8 +132,6 @@
       "seconds": 10.05
     }
   ],
-  "sha256": "62b9c55504804b28551e0458c2365ddc9f399e900f1016b4b29980761f859430",
-  "bytes": 15764072,
-  "source_fps": 24,
-  "rotation": "pre-rotated at pack time; runtime palette read is sequential (no 168-byte column stride)"
+  "sha256": "c1d2b85187f9d421d350a3f98e43b0e1f271b299efd6ab140a3624be885bfb16",
+  "bytes": 15838813
 }
