@@ -2,6 +2,13 @@
 
 Last updated: 2026-10-20
 
+## Independent Wi-Fi feasibility review (2026-10-20)
+
+- Fetched origin/main and reviewed `870758d` (firmware 1.36, pre-rotated animation pack, serial diagnostics). User reports the latest DeepSeek optimization still has little effect; retain the distinction between access-pattern correlation and a confirmed complete flicker fix.
+- Rebuilt the existing source without flashing: Flash usage **16,294,925 / 16,711,680 bytes**, about **416,755 bytes remaining**. Bridge tests **146 passed**. A public weather request using example coordinates succeeded from the Windows host (HTTP 200, 436-byte JSON); this is not device Wi-Fi validation.
+- Added [independent Wi-Fi feasibility report](docs/INDEPENDENT_WIFI_FEASIBILITY.md), checked against official ESP32-S3/ESP-IDF, ESP-SR, Open-Meteo, DeepSeek search/Responses, and XiaoZhi documentation. Current firmware has no Wi-Fi transport or weather client. Recommended progression: budget resources, prototype device-direct weather, then autonomous online ASR/LLM/tools/TTS through an optional cloud gateway. A Wi-Fi link to the current PC alone does not satisfy computer-off operation.
+- This is research only: no new Wi-Fi firmware, credentials, paid API call or cloud deployment; no running-device reset, flash, theme or audio change. Full conversation remains a service architecture task, not on-device execution of the existing desktop Whisper/CosyVoice/Hermes processes.
+
 ## Runtime transpose isolation and 40 fps baseline (2026-10-20)
 
 - Controlled frozen-image diagnostics on the 40 fps pack isolated the remaining steady flicker to the runtime 90-degree transpose in `colors()`. A sequential 28 KB read did not flicker; the same buffer read with the 168-byte column stride flickered; a sequential 56 KB write did not. The runtime transpose was removed by storing the animation pack pre-rotated in display orientation.
