@@ -81,3 +81,23 @@ Wi-Fi 发射功率暂设为 8.5 dBm，扫描时短暂暂停动画计算并使用
 CLI 会在断开后尝试重新握手，并读取 STATUS / NETWORK_STATUS；成功输出 JSON 报告表示诊断结束，**不代表无线验收通过**。正常结束会关掉无线探测并恢复原 CPU、动画、I2S；若复位，则重启恢复默认外设与 USB，同时保留无线安全模式。
 
 恢复检查：USB 固件 1.60 正常连接，原 DSH 动画帧号/传屏计数持续增加，测试语音 127 帧全部回执、CRC 与动画解码错误均为 0。
+
+
+## 最小固件分阶段验证：定位到 esp_wifi_start（接线不动）
+
+在相同 ESP-IDF 4.4.7 / Arduino-ESP32 2.0.17 下，临时刷入约 643 KB 的独立诊断应用。它不加载动画素材、不创建屏幕任务、不安装 I2S、不调用 Hermes/Bridge 协议、不读取 Wi-Fi 密码。保持屏幕/功放/麦克风物理连线与供电，数字时钟静止。只有 USB 明确发送 RUN_RADIO 才启动一次探测，复位后不会自动重试。
+
+| 配置 | 初始化结果 | 启动射频前的内存 | 最后阶段 / 恢复记录 |
+| --- | --- | --- | --- |
+| wifi-probe，psramFound=true，CPU 80 MHz | NVS、netif、事件循环、esp_wifi_init、RAM 存储、STA 模式均 ESP_OK | 内部空闲 283,896 B，最大连续块 270,324 B | before_wifi_start 后 USB 断开，恢复 reset_reason=9 |
+| wifi-probe-no-psram，psramFound=false，CPU 80 MHz | 同上，均 ESP_OK | 同上 | before_wifi_start 后 USB 断开，恢复 reset_reason=9 |
+
+这进一步说明本轮故障不需要动画、音频或 PSRAM 参与，且不是常规驱动初始化返回 ESP_ERR_NO_MEM。实际卡在 esp_wifi_start() 完成之前，未成功扫描、关联或进入 WebSocket。它仍不是外设断电/仅主控测试，不能断言是哪一处硬件故障，也没有验证换 SDK 后的结果。
+
+随后只读调用 esp_phy_load_cal_data_from_nvs：NVS 初始化 ESP_OK，校准读取返回 4354 / ESP_ERR_NVS_NOT_FOUND。该次只读检查没有启动射频，没有擦除、伪造或覆盖校准数据及用户凭据。[官方 RF 校准说明](https://docs.espressif.com/projects/esp-idf/en/v4.4/esp32s3/api-guides/RF_calibration.html)指出校准缓存缺失时会使用完整校准。缓存缺失与 esp_wifi_start 欠压相符，但尚未测量电流，也未证明是校准过程中的哪一步造成。
+
+之前应用中的 8.5 dBm 设置位于 WiFi.mode()/esp_wifi_start 之后，在本次启动失败前未执行到，不能将其视为已限制启动阶段功率。当前预编译 SDK 的 CONFIG_ESP_PHY_MAX_WIFI_TX_POWER=20，CONFIG_ESP_PHY_REDUCE_TX_POWER 未启用。下一步可考虑**单独构建 SDK 级低功率初始化对照**：按官方允许范围降低构建期 PHY 功率，并评估欠压后的 PHY 降功率选项；保持欠压保护，不跳过必要校准。此项尚未实现/实测，不能只加应用层 -D 就声称改变了预编译 SDK。参数与限制见 [官方 Kconfig](https://docs.espressif.com/projects/esp-idf/en/v4.4.8/esp32s3/api-reference/kconfig.html)。
+
+新增构建环境 wifi-probe / wifi-probe-no-psram 和 scripts/read_minimal_wifi_probe.py（可加 --calibration-only）。default_envs 明确保持 esp32-s3-devkitc-1，普通构建/上传不选择诊断应用；正常环境只编译 main.cpp，诊断源单独选择。两种最小环境及默认生产环境均编译通过。
+
+临时覆盖前先对真实 1.60 镜像做完整 digest 校验并保留私有备份，只覆盖应用起始 647,168 字节。射频两组对照作为一批、校准只读检查作为另一批；每批结束恢复原前缀，再对整份 15,922,960 字节应用做 digest 验证，两批恢复均成功，未改分区表或擦除 NVS。最终 Bridge 确认固件 1.60、USB COM9、扬声器就绪、原 DSH 动画持续增加、音频 CRC 与动画解码错误均为 0。完整非敏感阶段数据见 [结构化结果](wifi-minimal-results.json)。

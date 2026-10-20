@@ -1,0 +1,314 @@
+{
+  "note": "All peripheral wiring remained attached. Temporary minimal diagnostic applications were restored to verified firmware 1.60. No wireless connection succeeded.",
+  "sdk": "ESP-IDF 4.4.7 / Arduino-ESP32 2.0.17",
+  "radio_tests": [
+    {
+      "outcome": "USB_disconnected",
+      "last_stage": "before_wifi_start",
+      "records": [
+        {
+          "probe": "minimal-radio-1",
+          "stage": "ready",
+          "result": 0,
+          "result_name": "ESP_OK",
+          "reset_reason": 0,
+          "psram": true,
+          "cpu_mhz": 240,
+          "free_internal": 337936,
+          "largest_internal": 294900
+        },
+        {
+          "probe": "minimal-radio-1",
+          "stage": "begin",
+          "result": 0,
+          "result_name": "ESP_OK",
+          "reset_reason": 0,
+          "psram": true,
+          "cpu_mhz": 80,
+          "free_internal": 337936,
+          "largest_internal": 294900
+        },
+        {
+          "probe": "minimal-radio-1",
+          "stage": "nvs_init",
+          "result": 0,
+          "result_name": "ESP_OK",
+          "reset_reason": 0,
+          "psram": true,
+          "cpu_mhz": 80,
+          "free_internal": 337936,
+          "largest_internal": 294900
+        },
+        {
+          "probe": "minimal-radio-1",
+          "stage": "netif_init",
+          "result": 0,
+          "result_name": "ESP_OK",
+          "reset_reason": 0,
+          "psram": true,
+          "cpu_mhz": 80,
+          "free_internal": 333340,
+          "largest_internal": 294900
+        },
+        {
+          "probe": "minimal-radio-1",
+          "stage": "event_loop",
+          "result": 0,
+          "result_name": "ESP_OK",
+          "reset_reason": 0,
+          "psram": true,
+          "cpu_mhz": 80,
+          "free_internal": 329652,
+          "largest_internal": 294900
+        },
+        {
+          "probe": "minimal-radio-1",
+          "stage": "before_wifi_init",
+          "result": 0,
+          "result_name": "ESP_OK",
+          "reset_reason": 0,
+          "psram": true,
+          "cpu_mhz": 80,
+          "free_internal": 328452,
+          "largest_internal": 294900
+        },
+        {
+          "probe": "minimal-radio-1",
+          "stage": "wifi_init",
+          "result": 0,
+          "result_name": "ESP_OK",
+          "reset_reason": 0,
+          "psram": true,
+          "cpu_mhz": 80,
+          "free_internal": 283896,
+          "largest_internal": 270324
+        },
+        {
+          "probe": "minimal-radio-1",
+          "stage": "storage_ram",
+          "result": 0,
+          "result_name": "ESP_OK",
+          "reset_reason": 0,
+          "psram": true,
+          "cpu_mhz": 80,
+          "free_internal": 283896,
+          "largest_internal": 270324
+        },
+        {
+          "probe": "minimal-radio-1",
+          "stage": "set_mode",
+          "result": 0,
+          "result_name": "ESP_OK",
+          "reset_reason": 0,
+          "psram": true,
+          "cpu_mhz": 80,
+          "free_internal": 283896,
+          "largest_internal": 270324
+        },
+        {
+          "probe": "minimal-radio-1",
+          "stage": "before_wifi_start",
+          "result": 0,
+          "result_name": "ESP_OK",
+          "reset_reason": 0,
+          "psram": true,
+          "cpu_mhz": 80,
+          "free_internal": 283896,
+          "largest_internal": 270324
+        }
+      ],
+      "environment": "wifi-probe",
+      "recovery": {
+        "probe": "minimal-radio-1",
+        "stage": "ready",
+        "result": 0,
+        "result_name": "ESP_OK",
+        "reset_reason": 9,
+        "psram": true,
+        "cpu_mhz": 240,
+        "free_internal": 337936,
+        "largest_internal": 294900
+      }
+    },
+    {
+      "outcome": "USB_disconnected",
+      "last_stage": "before_wifi_start",
+      "records": [
+        {
+          "probe": "minimal-radio-1",
+          "stage": "ready",
+          "result": 0,
+          "result_name": "ESP_OK",
+          "reset_reason": 0,
+          "psram": false,
+          "cpu_mhz": 240,
+          "free_internal": 337936,
+          "largest_internal": 294900
+        },
+        {
+          "probe": "minimal-radio-1",
+          "stage": "begin",
+          "result": 0,
+          "result_name": "ESP_OK",
+          "reset_reason": 0,
+          "psram": false,
+          "cpu_mhz": 80,
+          "free_internal": 337936,
+          "largest_internal": 294900
+        },
+        {
+          "probe": "minimal-radio-1",
+          "stage": "nvs_init",
+          "result": 0,
+          "result_name": "ESP_OK",
+          "reset_reason": 0,
+          "psram": false,
+          "cpu_mhz": 80,
+          "free_internal": 337936,
+          "largest_internal": 294900
+        },
+        {
+          "probe": "minimal-radio-1",
+          "stage": "netif_init",
+          "result": 0,
+          "result_name": "ESP_OK",
+          "reset_reason": 0,
+          "psram": false,
+          "cpu_mhz": 80,
+          "free_internal": 333340,
+          "largest_internal": 294900
+        },
+        {
+          "probe": "minimal-radio-1",
+          "stage": "event_loop",
+          "result": 0,
+          "result_name": "ESP_OK",
+          "reset_reason": 0,
+          "psram": false,
+          "cpu_mhz": 80,
+          "free_internal": 329652,
+          "largest_internal": 294900
+        },
+        {
+          "probe": "minimal-radio-1",
+          "stage": "before_wifi_init",
+          "result": 0,
+          "result_name": "ESP_OK",
+          "reset_reason": 0,
+          "psram": false,
+          "cpu_mhz": 80,
+          "free_internal": 328452,
+          "largest_internal": 294900
+        },
+        {
+          "probe": "minimal-radio-1",
+          "stage": "wifi_init",
+          "result": 0,
+          "result_name": "ESP_OK",
+          "reset_reason": 0,
+          "psram": false,
+          "cpu_mhz": 80,
+          "free_internal": 283896,
+          "largest_internal": 270324
+        },
+        {
+          "probe": "minimal-radio-1",
+          "stage": "storage_ram",
+          "result": 0,
+          "result_name": "ESP_OK",
+          "reset_reason": 0,
+          "psram": false,
+          "cpu_mhz": 80,
+          "free_internal": 283896,
+          "largest_internal": 270324
+        },
+        {
+          "probe": "minimal-radio-1",
+          "stage": "set_mode",
+          "result": 0,
+          "result_name": "ESP_OK",
+          "reset_reason": 0,
+          "psram": false,
+          "cpu_mhz": 80,
+          "free_internal": 283896,
+          "largest_internal": 270324
+        },
+        {
+          "probe": "minimal-radio-1",
+          "stage": "before_wifi_start",
+          "result": 0,
+          "result_name": "ESP_OK",
+          "reset_reason": 0,
+          "psram": false,
+          "cpu_mhz": 80,
+          "free_internal": 283896,
+          "largest_internal": 270324
+        }
+      ],
+      "environment": "wifi-probe-no-psram",
+      "recovery": {
+        "probe": "minimal-radio-1",
+        "stage": "ready",
+        "result": 0,
+        "result_name": "ESP_OK",
+        "reset_reason": 9,
+        "psram": false,
+        "cpu_mhz": 240,
+        "free_internal": 337936,
+        "largest_internal": 294900
+      }
+    }
+  ],
+  "calibration_read_only": [
+    {
+      "outcome": "complete",
+      "records": [
+        {
+          "probe": "minimal-radio-1",
+          "stage": "ready",
+          "result": 0,
+          "result_name": "ESP_OK",
+          "reset_reason": 0,
+          "psram": true,
+          "cpu_mhz": 240,
+          "free_internal": 337936,
+          "largest_internal": 294900
+        },
+        {
+          "probe": "minimal-radio-1",
+          "stage": "nvs_init",
+          "result": 0,
+          "result_name": "ESP_OK",
+          "reset_reason": 0,
+          "psram": true,
+          "cpu_mhz": 240,
+          "free_internal": 337936,
+          "largest_internal": 294900
+        },
+        {
+          "probe": "minimal-radio-1",
+          "stage": "calibration_cache",
+          "result": 4354,
+          "result_name": "ESP_ERR_NVS_NOT_FOUND",
+          "reset_reason": 0,
+          "psram": true,
+          "cpu_mhz": 240,
+          "free_internal": 337936,
+          "largest_internal": 294900
+        },
+        {
+          "probe": "minimal-radio-1",
+          "stage": "complete",
+          "result": 0,
+          "result_name": "ESP_OK",
+          "reset_reason": 0,
+          "psram": true,
+          "cpu_mhz": 240,
+          "free_internal": 337936,
+          "largest_internal": 294900
+        }
+      ],
+      "environment": "wifi-probe"
+    }
+  ]
+}
