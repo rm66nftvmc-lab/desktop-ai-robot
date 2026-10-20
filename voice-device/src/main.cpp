@@ -423,15 +423,54 @@ static bool startSpeaker() {
 static void pollButton();
 
 static void handleFrame(uint8_t kind,const uint8_t *payload,uint16_t length) {
-  if(kind==18 && !networkSelected && !listening && !playing) {
-    bool animated=animationEnabled.exchange(false);delay(100);
-    WiFi.mode(WIFI_STA);WiFi.setTxPower(WIFI_POWER_8_5dBm);
-    int count=WiFi.scanNetworks(false,true,true,120);
-    JsonDocument report;JsonArray list=report["networks"].to<JsonArray>();
-    for(int i=0;i<count && i<12;i++) {
-      JsonObject item=list.add<JsonObject>();item["ssid"]=WiFi.SSID(i);item["rssi"]=WiFi.RSSI(i);
+  if(kind==18 && !networkSelected && !listening && !playing && length<=1 && (!length || payload[0]<=1)) {
+    const unsigned profile=length?payload[0]:0;
+    const bool animated=animationEnabled.load(),micWasReady=micReady,speakerWasReady=speakerReady;
+    const uint32_t cpuMHz=getCpuFrequencyMhz();
+    char starting[80];snprintf(starting,sizeof(starting),"{\"phase\":\"starting\",\"profile\":%u}",profile);
+    sendJson(19,starting);Serial.flush();delay(25);
+    networkPrefs.putBool("starting",true);
+    if(profile==1) {
+      animationEnabled=false;delay(100);
+      if(micReady){i2s_driver_uninstall(I2S_NUM_0);micReady=false;}
+      if(speakerReady){i2s_driver_uninstall(I2S_NUM_1);speakerReady=false;}
+      for(int pin:{4,5,15,16,17}){pinMode(pin,OUTPUT);digitalWrite(pin,LOW);}
+      sendJson(19,"{\"phase\":\"i2s_stopped\"}");Serial.flush();delay(25);
+      setCpuFrequencyMhz(80);delay(100);
+      sendJson(19,"{\"phase\":\"cpu_low_ready\"}");Serial.flush();delay(25);
     }
-    WiFi.scanDelete();animationEnabled=animated;
+    const uint32_t freeBefore=heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
+    sendJson(19,"{\"phase\":\"before_radio_init\"}");Serial.flush();delay(25);
+    bool modeStarted=WiFi.mode(WIFI_STA);
+    sendJson(19,modeStarted?"{\"phase\":\"mode_ready\"}":"{\"phase\":\"mode_failed\"}");
+    WiFi.setTxPower(WIFI_POWER_8_5dBm);
+    int count=modeStarted?WiFi.scanNetworks(false,true,true,120):-100;
+    bool targetVisible=false;
+    for(int i=0;i<count;i++)if(WiFi.SSID(i)==networkSsid)targetVisible=true;
+    WiFi.scanDelete();
+    if(modeStarted && targetVisible) {
+      WiFi.begin(networkSsid.c_str(),networkPassword.c_str());
+      uint32_t began=millis();
+      while(WiFi.status()!=WL_CONNECTED && millis()-began<8000)delay(100);
+    }
+    JsonDocument report;
+    report["phase"]="complete";report["profile"]=profile;report["mode_started"]=modeStarted;
+    report["scan_count"]=count;report["target_visible"]=targetVisible;
+    report["wifi_status"]=(int)WiFi.status();report["disconnect_reason"]=wifiDisconnectReason.load();
+    report["connected"]=WiFi.status()==WL_CONNECTED;
+    report["ip"]=WiFi.localIP().toString();report["free_before"]=freeBefore;
+    report["free_after"]=heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
+    report["phase"]="radio_complete";
+    char radioResult[768];size_t radioBytes=serializeJson(report,radioResult,sizeof(radioResult));
+    if(radioBytes<sizeof(radioResult))sendFrame(19,reinterpret_cast<uint8_t*>(radioResult),radioBytes);
+    WiFi.disconnect(true);networkPrefs.putBool("starting",false);
+    if(profile==1){
+      setCpuFrequencyMhz(cpuMHz);
+      if(micWasReady)micReady=startMicrophone();
+      if(speakerWasReady)speakerReady=startSpeaker();
+    }
+    animationEnabled=animated;lastHost=lastUsbFrame=millis();
+    report["phase"]="complete";report["mic_restored"]=micReady;report["speaker_restored"]=speakerReady;
     char result[1024];size_t n=serializeJson(report,result,sizeof(result));
     if(n<sizeof(result))sendFrame(19,reinterpret_cast<uint8_t*>(result),n);
   } else if(kind==16 && !networkSelected && !listening && !playing) {
@@ -634,7 +673,7 @@ void loop() {
   if (!connected && millis()-lastHello>=2000) {
     lastHello=millis();
       char hello[256];
-      snprintf(hello,sizeof(hello),"{\"protocol\":1,\"firmware\":\"voice-device-1.58\",\"display_theme\":%u,\"animation_enabled\":%s,\"boot_animation\":%s,\"pet_action\":%lu,\"pet_frame\":%lu,\"presents\":%lu,\"uptime_ms\":%lu}",
+      snprintf(hello,sizeof(hello),"{\"protocol\":1,\"firmware\":\"voice-device-1.60\",\"display_theme\":%u,\"animation_enabled\":%s,\"boot_animation\":%s,\"pet_action\":%lu,\"pet_frame\":%lu,\"presents\":%lu,\"uptime_ms\":%lu}",
         displayTheme.load(),animationEnabled?"true":"false",pet::bootGreeting?"true":"false",
         (unsigned long)pet::action.load(),(unsigned long)pet::frame.load(),(unsigned long)lcdPresents.load(),(unsigned long)millis());
       sendJson(FRAME_HELLO,hello);

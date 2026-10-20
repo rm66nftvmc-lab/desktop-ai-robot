@@ -435,3 +435,15 @@ Runtime data, access keys, API keys, local databases, logs, virtual environments
 因此软件降低负载（启动时 CPU 80 MHz、暂停动画计算、8.5 dBm 发射功率）仍未使当前硬件无线启动稳定。保持欠压保护，不继续提高供电电压或关闭保护；USB 备用已恢复，声音/动画绑定保留。当前只同步实现和故障证据，不把无线录音、播音或网络重连标记为成功。后续须先检查主控 3V3 供电瞬态、稳压器余量和背光负载/接线；现有记录不能确定供电路径中具体哪个元件有问题。
 
 USB 回归播音已实测 341 音频帧下发/回执全部一致，设备持续连接，device_bad_crc=0、pet_decode_errors=0；该结果是传输和设备回执确认，不替代用户听感确认。155 后端测试、19 网页测试通过。
+
+
+### 用户要求不拔线：1.59 / 1.60 软件负载对比
+
+未改变接线。新增受限 USB 诊断类型 18（profile 0/1）与 `scripts/probe_device_wifi.py`，单轮有超时、阶段记录和重启恢复读取，不泄露凭据。1.60 补齐 I2S 停止、CPU 低频就绪、进入无线初始化前的串口阶段标记，并 flush 后才继续。
+
+- 正常待机 profile 0：starting → before_radio_init → USB 断开；恢复后 reset_reason=9、wifi_safe_mode=true。
+- 低负载 profile 1：暂停动画、卸载 I2S、数字时钟/数据线拉低、CPU 80 MHz；已收到 i2s_stopped → cpu_low_ready → before_radio_init，随后 USB 断开；恢复后 reset_reason=1、wifi_safe_mode=true。上电复位 1 不应误报为欠压 9。
+- 两组都未收到 mode_ready。故障局限到开启无线模式完成之前，尚未进入网络扫描和 Bridge 握手，不能声称无线功能成功或明确具体硬件元件故障。仍存在外设持续供电影响，本轮不是仅主控测试。
+- 固件 1.60 已烧录并通过所有修改区 hash 校验。Bridge 已重启恢复，后续检查 USB、动画、语音；当前保留无线安全模式，用户无需再改线。
+
+本轮恢复检查：USB COM9 已连接固件 1.60，speaker_ready=true、animation_enabled=true、主题 DSH，presents 持续增加；回归播音 127 帧发送/回执一致，device_bad_crc=0、pet_decode_errors=0。协议与动画资源测试 5 项通过，诊断 CLI 编译检查通过。

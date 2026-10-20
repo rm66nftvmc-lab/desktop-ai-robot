@@ -271,3 +271,8 @@ The DSH Pet stage moves up 20 logical pixels to sit under the character's feet. 
 ### 1.58：无线实验与安全回退
 
 保留原有动画和音色；按实际 USB 心跳选择 USB / LAN WebSocket，开机等待 30 秒。无线初始化暂降 CPU 并暂停动画，启动欠压后进入持久化无线安全模式，USB 仍可恢复。最后一次外部供电测试也触发了该保护，因此无线尚未通过实物验收。详见 [无线 Bridge 记录](../docs/WIFI_BRIDGE.md)。
+
+
+### 1.60：不改线的无线负载探测
+
+本地 USB 诊断可比较正常待机与停止 I2S/暂停动画/CPU 80 MHz 的软件低负载，并输出明确的启动阶段。两组当前均在无线初始化完成前重启；正常组记录欠压 9，低负载组记录上电复位 1，仍未通过无线验收。测试不切断外设供电；保留原声音、动画及 USB 备用。
