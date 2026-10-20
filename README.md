@@ -109,3 +109,6 @@ Bridge 为以后私有网络访问预留了 `ROBOT_TAILNET_HOST` 环境变量，
 
 
 
+
+
+局域网无线 Bridge 正在开发验证，当前实物在 Wi-Fi 启动时触发欠压保护，USB 备用可用；尚未完成无线语音验收。实现、配置和故障证据见 [无线 Bridge 记录](docs/WIFI_BRIDGE.md)。
