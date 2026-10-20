@@ -30,6 +30,7 @@ static std::atomic<bool> bootGreeting{false};
 // 7 flash read into internal scratch, 8 decode-only, 9 colors-only, 10 combined load,
 // 11 sequential 56 KB write, 12 transposed read, 13 sequential read.
 // Modes 4-13 keep the displayed image frozen and never write the LCD.
+// 14 plays only idle at the original cadence, without random actions or fades.
 // Normal ANIMATION commands clear this mode; no web control enables it.
 static std::atomic<unsigned> testMode{0};
 static std::atomic<uint32_t> testHash{0},loadUs{0};
@@ -186,7 +187,8 @@ static void seek(uint32_t local) {
   frame=local;
 }
 static void start(uint32_t id,uint32_t now) {
-  memcpy(from,last,N*2);action=id;began=now;transition=now;seek(0);
+  if(testMode!=14)memcpy(from,last,N*2);
+  action=id;began=now;transition=now;seek(0);
 }
 static void enter(uint32_t now,bool greeting=false) {
   backgroundNeeded=true;face=-1;bootGreeting=greeting;
@@ -328,13 +330,16 @@ static void tick(uint32_t now,int current,bool animate,bool force=false) {
     if(testMode<=2)return;
   }
   if(!animate&&!force)return;
+  if(testMode==14&&(action!=0||bootGreeting)) {
+    bootGreeting=false;start(0,now);
+  }
   if(animate) {
     uint32_t duration=count()*1000/FPS;
     if(now-began>=duration) {
       if(action>=5) {bootGreeting=false;start(0,now);nextIdle=now+8000+esp_random()%14001;}
       else start(action,now);
     }
-    if(target(face)==0&&action==0&&int32_t(now-nextIdle)>=0) {
+    if(testMode!=14&&target(face)==0&&action==0&&int32_t(now-nextIdle)>=0) {
       int id;do{id=5+esp_random()%8;}while(id==previousRandom);
       previousRandom=id;++randomCount;start(id,now);
     }
@@ -358,7 +363,7 @@ static void tick(uint32_t now,int current,bool animate,bool force=false) {
     loadUs=micros()-renderStarted;
     return;
   }
-  const unsigned fade=min(256u,(now-transition)*256/220);
+  const unsigned fade=testMode==14?256:min(256u,(now-transition)*256/220);
   uint32_t blendStarted=micros();
   colors(reinterpret_cast<uint16_t*>(lcdFrameBytes),from,fade);
   if(fade<256)blendUs=micros()-blendStarted;

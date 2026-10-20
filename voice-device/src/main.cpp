@@ -378,10 +378,10 @@ static void handleFrame(uint8_t kind,const uint8_t *payload,uint16_t length) {
     lcdDrawFace(listening?FACE_ID_LISTEN:payload[0]);
   } else if (kind==FRAME_THEME && connected && length==1 && payload[0]<=2) {
     pendingTheme=payload[0]==2?2:1;
-  } else if (kind==FRAME_SCREEN_TEST && connected && (length==1||(length==2&&payload[1]<=2)) && payload[0]<=13
+  } else if (kind==FRAME_SCREEN_TEST && connected && (length==1||(length==2&&payload[1]<=2)) && payload[0]<=14
              && displayTheme==2 && !playing && !listening) {
     pendingLcdHz=length==2&&payload[1]==1?20000000:length==2&&payload[1]==2?40000000:26666666;
-    pet::testMode=payload[0];animationEnabled=payload[0]==0||payload[0]==3||payload[0]==8;
+    pet::testMode=payload[0];animationEnabled=payload[0]==0||payload[0]==3||payload[0]==8||payload[0]==14;
   } else if (kind==FRAME_ANIMATION && connected && length==1) {
     pendingLcdHz=displayTheme==2?26666666:40000000;
     pet::testMode=0;animationEnabled=payload[0]!=0;
@@ -504,7 +504,7 @@ void loop() {
   if (!connected && millis()-lastHello>=2000) {
     lastHello=millis();
       char hello[256];
-      snprintf(hello,sizeof(hello),"{\"protocol\":1,\"firmware\":\"voice-device-1.36\",\"display_theme\":%u,\"animation_enabled\":%s,\"boot_animation\":%s,\"pet_action\":%lu,\"pet_frame\":%lu,\"presents\":%lu,\"uptime_ms\":%lu}",
+      snprintf(hello,sizeof(hello),"{\"protocol\":1,\"firmware\":\"voice-device-1.37\",\"display_theme\":%u,\"animation_enabled\":%s,\"boot_animation\":%s,\"pet_action\":%lu,\"pet_frame\":%lu,\"presents\":%lu,\"uptime_ms\":%lu}",
         displayTheme.load(),animationEnabled?"true":"false",pet::bootGreeting?"true":"false",
         (unsigned long)pet::action.load(),(unsigned long)pet::frame.load(),(unsigned long)lcdPresents.load(),(unsigned long)millis());
       sendJson(FRAME_HELLO,hello);

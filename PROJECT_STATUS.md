@@ -2,6 +2,18 @@
 
 Last updated: 2026-10-20
 
+## Steady-motion isolation (2026-10-20)
+
+- Device API confirmed connected firmware 1.36, theme 2, animation enabled, no audio playing and CRC 0. User reports flicker in both ongoing movement/transitions or cannot distinguish them. No change to wiring, brightness, scan profile or source FPS is made for this comparison.
+- Source asset analysis found idle action 0's six-pixel outer border unchanged throughout all 402 frames; viewport-average adjacent-frame luminance change peaks around 0.461 on a 0–255 scale. This does not establish what the panel electrically displays, but gives no evidence of baked-in whole-background alternating brightness in idle imagery.
+- Firmware 1.37 adds serial-only `steady-motion` mode 14: force action 0, keep 40 fps and source duration, disable random actions and fades, and omit the unused crossfade-source copy. It keeps LCD output active. The normal renderer and default autonomous startup remain available; ordinary ANIMATION or diagnostic cleanup clears the mode. This isolates uninterrupted playback from state/clip fades, not a claimed fix.
+- Build, Python syntax and whitespace checks passed, plus all 3 asset/theme tests including a new RGB565 idle-border invariant. The pre-rotated pack remains unchanged. Full application flashing was interrupted near its end and a complete digest check correctly failed. The uncertain tail was rewritten from absolute address 0xD00000, then **all 16,295,392 application bytes passed full flash digest verification**. Testing began only after successful verification; the private flash baseline was refreshed then.
+- Direct serial telemetry confirms **1.37, mode 14, action 0, animation enabled, approximately 120 presents/3 seconds, CRC 0**. User reports **obvious flicker, approximately unchanged**, so state transitions and fades are not required to trigger the current symptom.
+- The same session then switched to ordinary `compute-only` on the new sequential-palette firmware. Pixel-write count remained **3465**, presents **3475**, while source updates advanced **3482 to 3602** over 3 seconds. User reports **marked improvement, but a little flicker remains**. This phase may change source action, so it is not a perfectly matched workload comparison. The frozen hash was captured earlier in mode 14 and is stale across this particular phase switch; do not use it to identify the newly frozen pose. Zero further LCD pixel writes is supported by the write counter.
+- Next phase repeats the same frozen viewport without animation computation: mode 2, source updates fixed **6811**, source frame fixed **127**, writes/presents increase **120/3001 ms**, CRC 0. User reports **only slight flicker**. This compares fixed-content LCD transfers against animated content and compute-only; it is not an electrical waveform measurement.
+- The same frozen image is now in `hold`: writes fixed **8459**, presents **8469**, source updates **6811**, frame **127**, CRC 0. Awaiting whether residual flicker remains with both computation and LCD traffic stopped. Preserve this phase until the physical report; no new voltage/scan/wiring change is involved.
+- Diagnostic exclusively owns COM9 while Bridge is temporarily stopped; the tool has a 600-second bound and restores normal animation/Bridge on cleanup. No brightness, wiring or scan change has been made. Do not report the steady-playback trial as a flicker fix.
+
 ## Independent Wi-Fi feasibility review (2026-10-20)
 
 - Fetched origin/main and reviewed `870758d` (firmware 1.36, pre-rotated animation pack, serial diagnostics). User reports the latest DeepSeek optimization still has little effect; retain the distinction between access-pattern correlation and a confirmed complete flicker fix.

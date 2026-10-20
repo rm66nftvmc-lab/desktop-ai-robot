@@ -26,6 +26,10 @@ def test_embedded_clips_are_complete_seekable_and_fit_flash():
     # Frames are pre-rotated at pack time to the display orientation.
     display_background = logical_background[:, ::-1].T
     palette = np.frombuffer(data[28:540], '<u2')
+    border = np.zeros((height,width), dtype=bool)
+    border[:6,:] = border[-6:,:] = True
+    border[:,:6] = border[:,-6:] = True
+    idle_border = None
     seen = 0
     for i in range(clips):
         first, count = struct.unpack_from('<II', data, co+i*8)
@@ -43,6 +47,13 @@ def test_embedded_clips_are_complete_seekable_and_fit_flash():
             assert len(decoded) == width*height
             previous = decoded.copy() if key else previous ^ decoded
             assert previous.max() < 64
+            if i == 0:
+                # Test actual RGB565 colors: different palette indices can
+                # encode the same color and must not be mistaken for flicker.
+                edge = palette[previous.reshape(height,width)][border]
+                if idle_border is None:
+                    idle_border = edge.copy()
+                assert np.array_equal(edge, idle_border)
             assert np.count_nonzero(palette[previous.reshape(height,width)] != display_background) > 1000
             unique.add(hashlib.sha256(previous.tobytes()).digest())
         assert len(unique) > count*.9
