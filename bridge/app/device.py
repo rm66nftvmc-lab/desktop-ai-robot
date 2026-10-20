@@ -292,6 +292,13 @@ class DeviceLink:
                 self._pending_theme = self._desired_theme
             port.write(protocol.encode(protocol.WELCOME, sequence, b'{"protocol":1}'))
             return (sequence + 1) & 0xFFFF
+        if frame.kind == protocol.NETWORK_STATUS:
+            try:
+                status = json.loads(frame.payload)
+                self._update(**{key: status.get(key) for key in (
+                    'wifi_safe_mode', 'wifi_configured', 'wifi_selected', 'wifi_status', 'wifi_disconnect_reason', 'free_internal')})
+            except (ValueError, TypeError, AttributeError):
+                pass
         if frame.kind == protocol.STATUS:
             try:
                 status = json.loads(frame.payload)

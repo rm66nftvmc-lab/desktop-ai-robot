@@ -25,6 +25,7 @@ FACE = 0x0C
 ANIMATION = 0x0D
 THEME = 0x0E
 SCREEN_TEST = 0x0F  # Local serial diagnostic: 0 normal, 1 hold, 2 repeat pose, 3 compute without LCD writes.
+NETWORK_STATUS = 0x14  # Separate diagnostic packet keeps the original STATUS below 1024 bytes.
 
 
 @dataclass(frozen=True)

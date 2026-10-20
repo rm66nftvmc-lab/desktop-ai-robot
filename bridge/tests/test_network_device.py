@@ -66,6 +66,17 @@ def test_invalid_config_does_not_break_usb_startup(tmp_path):
     assert network.error and network.take() is None
 
 
+def test_wifi_diagnostics_do_not_require_disclosing_credentials():
+    from bridge.app.device import DeviceLink
+    from bridge.app.protocol import Frame, NETWORK_STATUS
+    device = DeviceLink()
+    device._handle(Frame(NETWORK_STATUS, 1, b'{"wifi_configured":true,"wifi_status":3,"wifi_disconnect_reason":0}'), None, 0)
+    assert device.snapshot()['wifi_configured'] is True
+    assert device.snapshot()['wifi_status'] == 3
+    # Corrupt diagnostic JSON cannot kill the transport worker.
+    device._handle(Frame(NETWORK_STATUS, 2, b'[]'), None, 0)
+
+
 def test_device_link_routes_network_recording_and_playback(tmp_path, monkeypatch):
     from bridge.app import device as module
     from bridge.app.protocol import BUTTON, AUDIO_UP, AUDIO_DOWN, ACK, WELCOME

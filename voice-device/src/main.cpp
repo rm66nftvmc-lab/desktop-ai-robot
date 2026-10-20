@@ -61,7 +61,9 @@ static WebSocketsClient deviceSocket;
 static String networkSsid,networkPassword,networkHost,networkToken,networkHeaders;
 static uint16_t networkPort=8788;
 static bool socketStarted=false,networkSelected=false;
-static uint32_t wifiAttempt=0;
+static uint32_t wifiAttempt=0,lastUsbFrame=0,wifiStableAt=0;
+static bool wifiSafeMode=false,wifiRestoredCpu=false;
+static std::atomic<unsigned> wifiDisconnectReason{0};
 static uint8_t networkRx[8192];
 static size_t networkRead=0,networkWrite=0;
 static void resetLink() {
@@ -443,6 +445,7 @@ static void handleFrame(uint8_t kind,const uint8_t *payload,uint16_t length) {
       && address.fromString(host) && token.length()>=32 && token.length()<=128
       && port>=1024 && port<=65535;
     if(ok) {
+      networkPrefs.putBool("safe",false);networkPrefs.putBool("starting",false);
       ok=networkPrefs.putString("ssid",ssid)>0 && networkPrefs.putString("pass",password)==password.length()
         && networkPrefs.putString("host",host)>0 && networkPrefs.putString("token",token)>0
         && networkPrefs.putUShort("port",port)>0;
@@ -514,6 +517,7 @@ static void pollHost() {
       bool valid=crcStep(0xFFFF,rxBuffer+2,5+length)==expected;
       if (!valid) ++badCrc;
       if (valid) {
+        if(!networkSelected)lastUsbFrame=millis();
         pollButton(); // Let the button interrupt a stream between audio frames.
         handleFrame(rxBuffer[2],rxBuffer+7,length);
       }
@@ -561,13 +565,16 @@ static void pollMicrophone() {
 }
 
 static void pollNetwork() {
-  bool selected=millis()>8000 && !Serial && !networkSsid.isEmpty();
+  const bool usbActive=Serial.available()>0 || (lastUsbFrame && millis()-lastUsbFrame<5000);
+  bool selected=millis()>30000 && !usbActive && !wifiSafeMode && !networkSsid.isEmpty();
   if(selected!=networkSelected) {
     resetLink();networkSelected=selected;
-    if(!selected && socketStarted){deviceSocket.disconnect();WiFi.disconnect(true);socketStarted=false;}
+    if(!selected && socketStarted){deviceSocket.disconnect();WiFi.disconnect(true);socketStarted=false;setCpuFrequencyMhz(240);wifiStableAt=0;wifiRestoredCpu=false;}
   }
   if(!networkSelected)return;
   if(!socketStarted) {
+    networkPrefs.putBool("starting",true);
+    bool animated=animationEnabled.exchange(false);setCpuFrequencyMhz(80);delay(100);
     WiFi.mode(WIFI_STA);WiFi.setTxPower(WIFI_POWER_8_5dBm);WiFi.setSleep(false);
     WiFi.begin(networkSsid.c_str(),networkPassword.c_str());wifiAttempt=millis();
     networkHeaders="Authorization: Bearer "+networkToken;
@@ -581,9 +588,14 @@ static void pollNetwork() {
         for(size_t i=0;i<length;i++)networkRx[(networkWrite++)%sizeof(networkRx)]=data[i];
       }
     });
-    socketStarted=true;
+    socketStarted=true;animationEnabled=animated;
   }
-  if(WiFi.status()==WL_CONNECTED)deviceSocket.loop();
+  if(WiFi.status()==WL_CONNECTED) {
+    if(!wifiStableAt)wifiStableAt=millis();
+    if(!wifiRestoredCpu && millis()-wifiStableAt>10000){setCpuFrequencyMhz(240);wifiRestoredCpu=true;}
+    if(connected && millis()-wifiStableAt>30000 && networkPrefs.getBool("starting",false))networkPrefs.putBool("starting",false);
+    deviceSocket.loop();
+  }
   else if(millis()-wifiAttempt>15000){WiFi.reconnect();wifiAttempt=millis();}
 }
 
@@ -591,7 +603,14 @@ void setup() {
   pinMode(KEY_PIN,INPUT_PULLUP);
   Serial.setRxBufferSize(8192);
   Serial.begin(115200);
+  WiFi.onEvent([](WiFiEvent_t event,WiFiEventInfo_t info){
+    if(event==ARDUINO_EVENT_WIFI_STA_DISCONNECTED)wifiDisconnectReason=info.wifi_sta_disconnected.reason;
+  });
   networkPrefs.begin("bridge-net",false);
+  wifiSafeMode=networkPrefs.getBool("safe",false);
+  if(esp_reset_reason()==ESP_RST_BROWNOUT && networkPrefs.getBool("starting",false)) {
+    wifiSafeMode=true;networkPrefs.putBool("safe",true);networkPrefs.putBool("starting",false);
+  }
   networkSsid=networkPrefs.getString("ssid","");networkPassword=networkPrefs.getString("pass","");
   networkHost=networkPrefs.getString("host","");networkToken=networkPrefs.getString("token","");
   networkPort=networkPrefs.getUShort("port",8788);
@@ -615,7 +634,7 @@ void loop() {
   if (!connected && millis()-lastHello>=2000) {
     lastHello=millis();
       char hello[256];
-      snprintf(hello,sizeof(hello),"{\"protocol\":1,\"firmware\":\"voice-device-1.55\",\"display_theme\":%u,\"animation_enabled\":%s,\"boot_animation\":%s,\"pet_action\":%lu,\"pet_frame\":%lu,\"presents\":%lu,\"uptime_ms\":%lu}",
+      snprintf(hello,sizeof(hello),"{\"protocol\":1,\"firmware\":\"voice-device-1.58\",\"display_theme\":%u,\"animation_enabled\":%s,\"boot_animation\":%s,\"pet_action\":%lu,\"pet_frame\":%lu,\"presents\":%lu,\"uptime_ms\":%lu}",
         displayTheme.load(),animationEnabled?"true":"false",pet::bootGreeting?"true":"false",
         (unsigned long)pet::action.load(),(unsigned long)pet::frame.load(),(unsigned long)lcdPresents.load(),(unsigned long)millis());
       sendJson(FRAME_HELLO,hello);
@@ -644,6 +663,11 @@ void loop() {
       networkSelected?"wifi":"usb",WiFi.status()==WL_CONNECTED?WiFi.RSSI():0,
       (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT));
     sendJson(FRAME_STATUS,status);
+    char networkStatus[256];
+    snprintf(networkStatus,sizeof(networkStatus),"{\"wifi_safe_mode\":%s,\"wifi_configured\":%s,\"wifi_selected\":%s,\"wifi_status\":%d,\"wifi_disconnect_reason\":%u,\"free_internal\":%lu}",
+      wifiSafeMode?"true":"false",networkSsid.isEmpty()?"false":"true",networkSelected?"true":"false",(int)WiFi.status(),
+      wifiDisconnectReason.load(),(unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT));
+    sendJson(20,networkStatus);
   }
   pollMicrophone();
   if(!screenTaskRunning) lcdService();
