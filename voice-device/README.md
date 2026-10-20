@@ -242,3 +242,23 @@ Pet image channel levels use 90% software scaling, consistently applied to palet
 ### 1.46 SPI transaction audit
 
 Window commands and pixel payload now share one CS assertion / SPI transaction. Every pixel writer validates window geometry and expected RGB565 byte counts; `lcd_tx_errors` reports violations. Live sweeps across both themes and work states stayed at zero errors. Three sampled decoded frame hashes also matched host reconstruction before this change. These checks do not read back LCD RAM or establish electrical bus integrity; physical flicker feedback remains pending.
+
+### 1.47 requested 90 Hz comparison
+
+Normal scan selects C6=0x05 (nominal 90 Hz), with a 90 Hz presentation target. Actual initial delivery is about 80-83 updates/second under current processing/transport load. Image level, bus frequency, source timeline and checked transaction path are unchanged. Visual feedback is pending.
+
+### 1.48 small brightness increase
+
+Software image level rises from 90% to 95% at user request. The selected 90 Hz scan/presentation target, SPI clock and source timing stay unchanged. BLK wiring and backlight current are not controlled by this adjustment.
+
+### 1.49 maximum software image level
+
+`IMAGE_LEVEL=100` restores unattenuated source colors at user request. The selected 90 Hz settings stay unchanged. This does not alter the BLK circuit or establish maximum hardware backlight brightness.
+
+### 1.50 action-crossfade isolation
+
+`ACTION_CROSSFADE=false` disables runtime action crossfades and their source copy. Complete next-action frames are presented directly without a clear/blank frame. Offline interpolation within clips, 90 Hz settings and 100% image level remain unchanged. Direct changes may look more abrupt; switch-flash feedback is pending.
+
+### 1.51 action transitions restored
+
+At user request, `ACTION_CROSSFADE=true` restores the 220 ms eased opaque action blend after the direct-cut trial felt abrupt. The selected 90 Hz settings and 100% image level stay unchanged. Flicker root cause remains unresolved.

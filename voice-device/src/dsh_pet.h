@@ -45,7 +45,8 @@ static uint32_t u32(const uint8_t *p) {return uint32_t(p[0])|(uint32_t(p[1])<<8)
 static void *alloc(size_t n) {return heap_caps_malloc(n,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);}
 // Modest software image dimming; BLK remains wired to its existing pull-up.
 // Apply once to the palette and background so transitions share the same level.
-constexpr unsigned IMAGE_LEVEL=90;
+constexpr unsigned IMAGE_LEVEL=100;
+constexpr bool ACTION_CROSSFADE=true; // Restore eased action transitions at user request.
 static uint16_t dimColor(uint16_t value) {
   unsigned r=((value>>11)*IMAGE_LEVEL+50)/100;
   unsigned g=(((value>>5)&63)*IMAGE_LEVEL+50)/100;
@@ -206,7 +207,7 @@ static void seek(uint32_t local) {
   frame=local;
 }
 static void start(uint32_t id,uint32_t now) {
-  if(!steadyTest())memcpy(from,last,N*2);
+  if(ACTION_CROSSFADE&&!steadyTest())memcpy(from,last,N*2);
   action=id;began=now;transition=now;seek(0);
 }
 static void enter(uint32_t now,bool greeting=false) {
@@ -226,7 +227,7 @@ static void tick(uint32_t now,int current,bool animate,bool force=false) {
   static unsigned cadenceMode=0;
   const unsigned mode=testMode;
   if(mode==0||(mode>=16&&mode<=20)) {
-    const uint32_t period=mode==0?13333:(mode==20?8403:(mode==19?16667:(mode==18?20000:(mode==16?33333:50000)))),currentUs=micros();
+    const uint32_t period=mode==0?11111:(mode==20?8403:(mode==19?16667:(mode==18?20000:(mode==16?33333:50000)))),currentUs=micros();
     if(cadenceMode!=mode) {cadenceMode=mode;cadenceUs=currentUs;}
     const uint32_t elapsed=currentUs-cadenceUs;
     if(!force&&elapsed<period)return;
@@ -411,12 +412,12 @@ static void tick(uint32_t now,int current,bool animate,bool force=false) {
     loadUs=micros()-renderStarted;
     return;
   }
-  const unsigned linearFade=steadyTest()?256:min(256u,(now-transition)*256/220);
+  const unsigned linearFade=(!ACTION_CROSSFADE||steadyTest())?256:min(256u,(now-transition)*256/220);
   // Ease the real action transition at both ends. Blend opaque, complete
   // source/target images; never fade via black, white or a cleared background.
   const unsigned fade=(linearFade*linearFade*(768-2*linearFade)+32768)>>16;
   uint32_t blendStarted=micros();
-  colors(reinterpret_cast<uint16_t*>(lcdFrameBytes),from,fade);
+  colors(reinterpret_cast<uint16_t*>(lcdFrameBytes),ACTION_CROSSFADE?from:nullptr,fade);
   if(fade<256)blendUs=micros()-blendStarted;
   lcdComposeUs=micros()-renderStarted;
   const uint32_t pushStarted=micros();

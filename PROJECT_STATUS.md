@@ -2,6 +2,31 @@
 
 Last updated: 2026-10-20
 
+## Eased action transitions restored (2026-10-20)
+
+- User reports the no-crossfade trial looks like abrupt cuts and requests transitions back; no definitive flash verdict was provided for that trial. Firmware **1.51** restores `ACTION_CROSSFADE=true` and its existing 220 ms eased opaque blend. Normal source interpolation, selected 90 Hz settings and 100% software image level are retained.
+- Build and incremental flash verification passed. Restoration is a user preference, not evidence that crossfades are cleared as a possible contributor to flicker.
+
+## Action crossfade disabled for isolation (2026-10-20)
+
+- User confirms pronounced flashes specifically on action switching. Firmware **1.50** sets `ACTION_CROSSFADE=false`: no 220 ms RGB frame mixing or transition-source copy on action changes. Complete next-action frames go through the existing checked dirty-rectangle writer; there is no clear or blank image inserted. Source interpolation inside each clip is retained, as are nominal 90 Hz scan, presentation target, 100% software image level and 40 MHz SPI.
+- Build and incremental flash verification passed. This is an isolation change, not a claim that crossfade is proven to cause the flashes. Direct pose changes may be more abrupt; physical switch-flash feedback is pending.
+
+## Maximum software image brightness (2026-10-20)
+
+- At user request, firmware **1.49** sets `IMAGE_LEVEL=100`, restoring unattenuated source RGB565 colors for both palette and background. Selected nominal 90 Hz scan, presentation target, SPI clock and source timing stay unchanged. This is maximum software image level, not a claim of maximum hardware backlight output.
+- Build and incremental flash verification passed; physical brightness/flicker feedback is pending.
+
+## Slight brightness increase at 90 Hz (2026-10-20)
+
+- At user request, firmware **1.48** raises software RGB565 image level from 90% to 95%, retaining nominal 90 Hz scan, 90 Hz presentation target, 40 MHz SPI and original source timing. This changes palette/background channel values, not the BLK circuit or backlight current.
+- Build and incremental flash verification passed; physical brightness/flicker feedback is pending.
+
+## Requested 90 Hz comparison (2026-10-20)
+
+- User requests 90 Hz after the 1.46 audit trial, without a definitive visual verdict for 1.46. Firmware **1.47** selects nominal C6=0x05 (90 Hz scan) and an 11,111 us normal presentation target, retaining 40 MHz SPI, 90% software image level, checked single-transaction writes and the original source timeline.
+- Build and incremental flash hashes passed. Bridge reconnected to 1.47 with animation enabled, USB CRC 0. Initial live windows show 248 and 239 presentations per 3 seconds (~80-83 Hz), so 90 is the configured target, not a claim of 90 actual delivered images/second or optically measured panel rate. Physical brightness/flicker feedback is pending.
+
 ## Pixel and SPI code audit (2026-10-20)
 
 - User sees clean desktop replay of the exact embedded source frames and asks to audit transport code. This lowers suspicion of the asset but does not prove electrical SPI corruption.
