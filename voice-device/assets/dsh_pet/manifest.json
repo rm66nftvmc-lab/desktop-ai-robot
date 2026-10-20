@@ -125,7 +125,8 @@
       "seconds": 10.05
     }
   ],
-  "sha256": "0ac049ae8daf47f732c339e8ee7720c94b665ab88a403dca360ae1a75e384aab",
-  "bytes": 15896213,
-  "source_fps": 24
+  "sha256": "62b9c55504804b28551e0458c2365ddc9f399e900f1016b4b29980761f859430",
+  "bytes": 15764072,
+  "source_fps": 24,
+  "rotation": "pre-rotated at pack time; runtime palette read is sequential (no 168-byte column stride)"
 }

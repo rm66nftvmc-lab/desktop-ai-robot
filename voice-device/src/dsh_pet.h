@@ -25,10 +25,14 @@ static int face=-1,previousRandom=-1;
 static uint32_t began=0,transition=0,lastTick=0;
 static bool valid=false,backgroundNeeded=true;
 static std::atomic<bool> bootGreeting{false};
-// Diagnostic modes: 1 hold, 2 repeat frozen pixels, 3 compute animation without writes.
+// Diagnostic modes: 1 hold, 2 repeat frozen pixels, 3 compute animation without writes,
+// 4 CPU-only busy work, 5 PSRAM read into internal scratch, 6 internal-RAM copy,
+// 7 flash read into internal scratch, 8 decode-only, 9 colors-only, 10 combined load,
+// 11 sequential 56 KB write, 12 transposed read, 13 sequential read.
+// Modes 4-13 keep the displayed image frozen and never write the LCD.
 // Normal ANIMATION commands clear this mode; no web control enables it.
 static std::atomic<unsigned> testMode{0};
-static std::atomic<uint32_t> testHash{0};
+static std::atomic<uint32_t> testHash{0},loadUs{0};
 static bool testCaptured=false;
 static uint32_t u32(const uint8_t *p) {return uint32_t(p[0])|(uint32_t(p[1])<<8)|(uint32_t(p[2])<<16)|(uint32_t(p[3])<<24);}
 static void *alloc(size_t n) {return heap_caps_malloc(n,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);}
@@ -58,7 +62,11 @@ static bool init() {
     last=(uint16_t*)heap_caps_malloc(N*2,MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
   internalFrame=internalIndices&&last!=nullptr;
   if(!last)last=(uint16_t*)alloc(N*2);
-  from=(uint16_t*)alloc(N*2);
+  // The crossfade source is read for every transition pixel. Prefer internal
+  // RAM so the fade does not add a PSRAM burst; fall back to PSRAM if needed.
+  if(heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT)>=N*2+65536)
+    from=(uint16_t*)heap_caps_malloc(N*2,MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
+  if(!from)from=(uint16_t*)alloc(N*2);
 
   if(!indices||!delta||!last||!from||!inflater) return false;
   clipOffset=u32(petPack+16);frameOffset=u32(petPack+20);dataOffset=u32(petPack+24);
@@ -146,15 +154,27 @@ static bool decode(uint32_t global,bool key) {
   decodeUs.fetch_add(micros()-t);
   return true;
 }
-static void colors(uint16_t *dest) {
+static void colors(uint16_t *dest,const uint16_t *previous=nullptr,unsigned fade=256) {
   uint32_t t=micros();
-  // Delta scratch is no longer needed after decode. It provides a separate
-  // indexed source even when indices fell back to PSRAM, so output never
-  // overwrites its own input. Palette conversion writes the final frame once.
-  memcpy(delta,indices,N);
+  // The animation pack is stored in display orientation. Palette conversion is
+  // therefore a sequential read; the old runtime 90-degree transpose used a
+  // 168-byte column stride that correlated with visible panel flicker.
+  // Transition fading is folded into the same pass so the finished frame is
+  // written once instead of being read back, blended and rewritten.
   uint16_t row[W];
   for(int py=0;py<W;++py) {
-    for(int px=0;px<W;++px)row[px]=palette[delta[px*W+(W-1-py)]];
+    for(int px=0;px<W;++px) {
+      uint16_t value=palette[indices[py*W+px]];
+      if(previous&&fade<256) {
+        const uint16_t before=previous[py*W+px];
+        // Background pixels are identical in every clip. Skipping them avoids
+        // most of the per-pixel blend work during the 220 ms transition.
+        if(before!=value)
+          value=__builtin_bswap16(blend(__builtin_bswap16(before),
+                                        __builtin_bswap16(value),fade));
+      }
+      row[px]=value;
+    }
     memcpy(dest+py*W,row,W*2);
   }
   colorUs.fetch_add(micros()-t);
@@ -222,6 +242,89 @@ static void tick(uint32_t now,int current,bool animate,bool force=false) {
       }
       lcdEndPixels();++lcdPresents;
     }
+    if(testMode>=4&&testMode<=7) {
+      // Keep the frozen image untouched. Each mode runs a bounded three-millisecond
+      // burst per 40 Hz tick so the current draw can be compared across CPU,
+      // external-PSRAM, internal-RAM and flash work without any LCD traffic.
+      const uint32_t started=micros();
+      if(testMode==4) {
+        volatile uint32_t value=0x9e3779b9u;
+        while(micros()-started<3000) {
+          for(int i=0;i<128;++i) value=value*1664525u+1013904223u;
+        }
+      } else if(testMode==5) {
+        do { memcpy(delta,from,N); } while(micros()-started<3000);
+      } else if(testMode==6) {
+        do { memcpy(lcdFrameBytes,delta,N); } while(micros()-started<3000);
+      } else {
+        // Walk across the embedded animation pack so the reads miss the small
+        // flash cache instead of replaying one cached region.
+        static uint32_t loadPosition=0;
+        do {
+          memcpy(delta,petPack+loadPosition,N);
+          loadPosition=(loadPosition+N)%(4u*1024*1024);
+        } while(micros()-started<3000);
+      }
+      loadUs=micros()-started;
+      return;
+    }
+    if(testMode==9) {
+      // Output-side work only: palette-convert into the 56 KB final frame and
+      // read it back, without decoding or writing the LCD.
+      const uint32_t started=micros();
+      do { colors(reinterpret_cast<uint16_t*>(lcdFrameBytes)); } while(micros()-started<3000);
+      loadUs=micros()-started;
+      return;
+    }
+    if(testMode==10) {
+      // Combined burst: CPU arithmetic plus PSRAM read/write, internal copy and
+      // flash read in the same 3 ms window.
+      const uint32_t started=micros();
+      static uint32_t loadPosition=0;
+      volatile uint32_t value=0x9e3779b9u;
+      do {
+        for(int i=0;i<64;++i) value=value*1664525u+1013904223u;
+        memcpy(delta,from,N);
+        memcpy(from,delta,N);
+        memcpy(lcdFrameBytes,delta,N);
+        memcpy(delta,petPack+loadPosition,N);
+        loadPosition=(loadPosition+N)%(4u*1024*1024);
+      } while(micros()-started<3000);
+      loadUs=micros()-started;
+      return;
+    }
+    if(testMode==11) {
+      // Sequential 56 KB write into the final frame buffer: isolates write volume
+      // from the transposed read pattern used by colors().
+      const uint32_t started=micros();
+      do {
+        auto out=reinterpret_cast<uint32_t*>(lcdFrameBytes);
+        for(int i=0;i<N/2;++i) out[i]=uint32_t(i)*2654435761u;
+      } while(micros()-started<3000);
+      loadUs=micros()-started;
+      return;
+    }
+    if(testMode==12) {
+      // The exact column-wise read pattern of colors(), without any writes.
+      const uint32_t started=micros();
+      volatile uint32_t sum=0;
+      do {
+        for(int py=0;py<W;++py)
+          for(int px=0;px<W;++px) sum+=indices[px*W+(W-1-py)];
+      } while(micros()-started<3000);
+      loadUs=micros()-started;
+      return;
+    }
+    if(testMode==13) {
+      // Sequential 28 KB read control for testMode 12.
+      const uint32_t started=micros();
+      volatile uint32_t sum=0;
+      do {
+        for(int i=0;i<N;++i) sum+=indices[i];
+      } while(micros()-started<3000);
+      loadUs=micros()-started;
+      return;
+    }
     if(testMode<=2)return;
   }
   if(!animate&&!force)return;
@@ -229,9 +332,9 @@ static void tick(uint32_t now,int current,bool animate,bool force=false) {
     uint32_t duration=count()*1000/FPS;
     if(now-began>=duration) {
       if(action>=5) {bootGreeting=false;start(0,now);nextIdle=now+8000+esp_random()%14001;}
-      else start(action==0&&esp_random()%3==0?1:action==1?0:action.load(),now);
+      else start(action,now);
     }
-    if(target(face)==0&&action<2&&int32_t(now-nextIdle)>=0) {
+    if(target(face)==0&&action==0&&int32_t(now-nextIdle)>=0) {
       int id;do{id=5+esp_random()%8;}while(id==previousRandom);
       previousRandom=id;++randomCount;start(id,now);
     }
@@ -249,20 +352,16 @@ static void tick(uint32_t now,int current,bool animate,bool force=false) {
       } else seek(wanted);
     }
   }
-  colors(reinterpret_cast<uint16_t*>(lcdFrameBytes));
-  uint32_t blendStarted=micros();
-  unsigned fade=min(256u,(now-transition)*256/220);
-  // Blend only transitions, directly in the final internal frame buffer.
-  if(fade<256) {
-    uint16_t ar[W],fr[W],out[W];
-    for(int y=0;y<W;++y) {
-      memcpy(ar,lcdFrameBytes+y*W*2,W*2);memcpy(fr,from+y*W,W*2);
-      for(int x=0;x<W;++x)
-        out[x]=__builtin_bswap16(blend(__builtin_bswap16(fr[x]),__builtin_bswap16(ar[x]),fade));
-      memcpy(lcdFrameBytes+y*W*2,out,W*2);
-    }
+  if(testMode==8) {
+    // Decode-only: advance the real animation and build index state, then stop
+    // before palette conversion, dirty scan, shadow copy and LCD output.
+    loadUs=micros()-renderStarted;
+    return;
   }
-  blendUs=micros()-blendStarted;
+  const unsigned fade=min(256u,(now-transition)*256/220);
+  uint32_t blendStarted=micros();
+  colors(reinterpret_cast<uint16_t*>(lcdFrameBytes),from,fade);
+  if(fade<256)blendUs=micros()-blendStarted;
   lcdComposeUs=micros()-renderStarted;
   const uint32_t pushStarted=micros();
   // Find the final dirty rectangle in internal row scratch. One RAMWR stream

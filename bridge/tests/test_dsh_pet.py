@@ -23,6 +23,8 @@ def test_embedded_clips_are_complete_seekable_and_fit_flash():
     assert len((ASSETS/'background.bin').read_bytes()) == 240*320*2
     background = np.frombuffer((ASSETS/'background.bin').read_bytes(), '>u2').reshape(320,240)
     logical_background = np.rot90(background[76:244,36:204], -1)
+    # Frames are pre-rotated at pack time to the display orientation.
+    display_background = logical_background[:, ::-1].T
     palette = np.frombuffer(data[28:540], '<u2')
     seen = 0
     for i in range(clips):
@@ -41,7 +43,7 @@ def test_embedded_clips_are_complete_seekable_and_fit_flash():
             assert len(decoded) == width*height
             previous = decoded.copy() if key else previous ^ decoded
             assert previous.max() < 64
-            assert np.count_nonzero(palette[previous.reshape(height,width)] != logical_background) > 1000
+            assert np.count_nonzero(palette[previous.reshape(height,width)] != display_background) > 1000
             unique.add(hashlib.sha256(previous.tobytes()).digest())
         assert len(unique) > count*.9
         assert manifest['clips'][i]['frames'] == count

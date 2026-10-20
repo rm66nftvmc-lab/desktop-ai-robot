@@ -1,6 +1,14 @@
 # Desktop AI Robot project status
 
-Last updated: 2026-10-19
+Last updated: 2026-10-20
+
+## Runtime transpose isolation and 40 fps baseline (2026-10-20)
+
+- Controlled frozen-image diagnostics on the 40 fps pack isolated the remaining steady flicker to the runtime 90-degree transpose in `colors()`. A sequential 28 KB read did not flicker; the same buffer read with the 168-byte column stride flickered; a sequential 56 KB write did not. The runtime transpose was removed by storing the animation pack pre-rotated in display orientation.
+- Firmware **1.36** keeps 13 DSH Pet clips at 40 fps, 220 ms transitions, and a 6 MiB decoded-delta cache. Palette conversion is now a sequential read. The transition fade is fused into that pass and skips pixels that are identical to the previous frame; the crossfade source prefers internal RAM.
+- A true 60 fps build was generated and tested with 8 clips x 602 frames (11.18 MB) and then rejected. At 168x168 RGB565 the panel needs 56 KB/frame; 60 fps requires about 3.4 MB/s while 26.67 MHz SPI provides about 3.33 MB/s, so even single-clip playback flickered. The 60 fps assets and 8-clip firmware were reverted; 40 fps is the retained baseline.
+- Serial-only diagnostic modes 4-13 remain in `dsh_pet.h`/`display_ab_test.py` for CPU, PSRAM, internal-RAM, flash, decode-only, colors-only, combined, sequential-write, transposed-read and sequential-read comparisons. They never write the LCD and are not exposed to the web UI.
+- Validation after the revert: **146 Bridge tests and 11 web interaction tests passed**; the pre-rotated pack is checked frame by frame by `test_dsh_pet.py`. Physical steady/transition flicker feedback for 1.36 is still being collected; no claim of a complete flicker fix is made.
 
 ## Handoff snapshot and standalone USB-supply test (2026-10-19)
 

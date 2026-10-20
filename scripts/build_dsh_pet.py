@@ -123,6 +123,9 @@ def build(cache, out):
             fraction = position-i
             f = frames[i] if fraction < 1e-6 else intermediate(frames[i], frames[(i+1)%len(frames)], flow, fraction)
             indices = np.asarray(compose(f).quantize(palette=palette, dither=Image.Dither.NONE))
+            # Store frames in display orientation so runtime palette conversion is
+            # a sequential read instead of a flicker-prone 168-byte column stride.
+            indices = np.ascontiguousarray(indices[:, ::-1].T)
             key = j % FPS == 0
             delta = indices if key else np.bitwise_xor(indices, previous)
             packed = zlib.compress(delta.tobytes(), 9)
