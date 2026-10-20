@@ -2,6 +2,65 @@
 
 Last updated: 2026-10-20
 
+## Pixel and SPI code audit (2026-10-20)
+
+- User sees clean desktop replay of the exact embedded source frames and asks to audit transport code. This lowers suspicion of the asset but does not prove electrical SPI corruption.
+- Three live frozen-frame checks on 1.45 matched host reconstruction of the exact RGB565 bytes (including 90% software dimming): idle frames 168 / 380 / 98 had FNV-1a hashes 3760828583 / 2329059366 / 3817219337 respectively, identical on host and device. This validates sampled decoded/shadow image contents, not LCD RAM readback.
+- Audited buffer layout: the 168-square RGB frame plus 16-row transfer scratch fits inside the 192-square shared buffer; delta-cache scratch is overwritten by complete composition before output; only the display task owns composition/SPI after setup. Arduino 2.0.17 `SPI.writeBytes` is synchronous and its ESP32-S3 HAL polls 64-byte chunks. No confirmed asynchronous source-buffer reuse or out-of-bounds strip was found.
+- Firmware **1.46** stages the rectangle and sends CASET/RASET/RAMWR plus pixels under one SPI transaction/CS assertion. All pet, background, fill and Emotion Ball pixel writes use a checked writer: validate window bounds, even RGB565 byte counts, no overrun, and exact expected byte count at end. Added `lcd_tx_errors` telemetry; this is software length/geometry validation, not electrical CRC/ACK from the screen.
+- Build and incremental flash hashes passed, three existing asset/theme/audio-policy tests passed. A 32-second live serial sweep exercised both themes and recording/thinking/speaking/idle states; `lcd_tx_errors`, decode errors and USB CRC stayed zero, no restart. Normal pet delivery was approximately 74-75 Hz once warm. The original 75 Hz scan setting, 90% image level and source clip duration are retained. Bridge restored. Physical flicker feedback is pending.
+- Remaining risks: the 8-pin display exposes no TE synchronization or MISO readback in the current wiring, so correct transmitted pixels can still tear during panel scan, and no screen-side integrity check exists. 40 MHz is a tested configuration, not a verified KAC module electrical rating. A DMA/scan-synchronization experiment would be a further change, not a claimed fix already made.
+
+## Slight image dimming (2026-10-20)
+
+- At user request, firmware **1.45** keeps the selected nominal 75 Hz scan / 75 Hz presentation target and 40 MHz SPI, while reducing RGB565 image channel values to 90% (rounded). This is software image dimming, not PWM or a change to BLK/backlight supply.
+- Palette colors and the full background / initial transition source use the same mapping. Original assets are preserved; per-frame palette conversion gains no new per-pixel dimming pass. Build and changed-sector flash verification passed, Bridge restored and connected to 1.45. Physical brightness/flicker feedback is pending.
+
+## Selected 75 Hz configuration (2026-10-20)
+
+- User requested 75 Hz. Firmware **1.44** selects nominal ST7789 FRCTRL2 C6=0x09 scanning and a 13,333 us normal presentation deadline (~75 updates/second), while retaining 40 MHz SPI and the original 40 fps source timeline / clip duration. Both power-on initialization and normal theme/animation restoration use the selected scan setting. Diagnostic maximum-scan mode remains temporary, and other diagnostic comparisons retain explicit scan choices.
+- Build and incremental flash verification passed. Bridge reconnected to 1.44 with animation enabled, CRC 0. Live telemetry: presents 526 -> 751 over 3000 ms and 751 -> 973 over 3001 ms, approximately 74-75 delivered presentations/second during those windows. This verifies transport cadence, not measured optical panel refresh. Physical brightness/flicker feedback is pending.
+
+## Maximum scan / presentation diagnostic (2026-10-20)
+
+- User reports 1.42 now flickers continuously, rejecting any claim that the normal-mode transition revision fixed it. Previous positive feedback applied to isolated mode 19, not every production workload.
+- Checked ST7789V controller datasheet: C6 RTNA=0 requests nominal 119 Hz, RTNA=0x0F nominal 60 Hz. Exact KAC module rated maximum remains unverified. Scan frequency and pixel transport frequency are distinct; 240x320 RGB565 at 40 MHz has a theoretical full-screen ceiling of 32.55 images/second before protocol/software overhead. Controller serial timing and module wiring must not be inferred from ESP32 SPI capability.
+- Firmware **1.43** adds temporary serial mode 20 (`steady-limit`): same idle clip, no fades/random actions, target 119 presentations/second and nominal highest C6 scan setting, SPI kept at 40 MHz. Normal scan setting remains 0x0F. Diagnostic cleanup/ANIMATION restores that scan setting. Earlier highest-scan trials became dim, so this is a 120-second bounded comparison, not a new permanent scan default.
+- Build and changed-sector write hashes passed. Initial actual throughput is **225-226 presentations per 3 seconds (~75 Hz)**, not 119 delivered images/second; decode/transfer costs limit cadence. Source timeline stays 40 fps. User reports the image is too dark; actions are very smooth but flicker remains. This maximum-scan setting is rejected. The bounded test ended, cleanup requested C6=0x0F and normal animation, and Bridge reconnected to firmware 1.43. Reference: https://newhavendisplay.com/content/datasheets/ST7789V.pdf (FRCTRL2).
+
+## Normal 60 Hz playback and transition revision (2026-10-20)
+
+- User clarified the residual white flash occurs at both clip loops and state/action transitions; ordinary playback looks essentially normal at 60 Hz.
+- Firmware **1.42** promotes 60 Hz repeated presentation / 40 MHz SPI to normal pet playback, including autonomous startup, animation commands and real state changes. Source assets remain 40 fps and original duration. Serial diagnostic modes retain their explicit comparison rates/clocks.
+- Same-action loop rollover now carries elapsed time remainder and decodes the new cycle without restarting its fade. Host states mapping to the same action no longer restart the clip. Real action changes preserve the displayed image and use a smoothstep 220 ms opaque crossfade; no clear/white intermediate frame is introduced.
+- Build, incremental flash hashes, three existing asset/theme/audio-policy tests, Python syntax and whitespace checks passed. A normal-mode visual state demo exercised recording/thinking/speaking/idle, with 40 MHz, approximately 180 presentations per 3 seconds, no decode/CRC errors or restart. Physical loop/transition verdict is pending; do not report the remaining white flash as fixed.
+
+## 60 Hz repeated-frame comparison (2026-10-20)
+
+- User requested 60 Hz after the 50 Hz trial, without a comparative visual verdict for 50 Hz. Firmware **1.41**, serial-only mode 19 (`steady-60`), retains the 40 fps source timeline and original clip duration; repeats resend final valid pixels in the last dirty rectangle. SPI remains 40 MHz. No new interpolated poses or blank frames are added; normal playback defaults are unchanged.
+- Build and incremental flash hashes passed. Live device confirms mode 19, action 0, 40 MHz, **180 presentations and pixel writes per 3000 ms**, source frame advances 120, CRC 0. User reports **almost no continuous flicker, but occasional sudden white flashes**. Keep this distinction: 60 Hz improves the reported continuous flicker but is not a complete fix. The test continues pending classification of whole-screen versus character-area/loop-boundary flashes. This does not measure the panel's internal scan rate.
+- Investigation so far: device uptime remains continuous, CRC and pet decode errors remain 0, action stays 0 without random switching/fades. The 402 decoded source frames have no full-white image: near-white pixels peak at 2.073%; mean relative luminance ranges 0.384-0.395, maximum adjacent/loop mean step 0.00214. These are host asset checks, not proof of correct electrical LCD writes or backlight stability. No clear command is issued in the steady animation path.
+
+## 50 Hz repeated-frame comparison (2026-10-20)
+
+- User reports steady 40 fps with SPI raised from 26.67 MHz to 40 MHz looks approximately the same. No flicker fix is claimed.
+- Firmware **1.40** adds serial-only mode 18 (`steady-50`): 50 presentations/second at 40 MHz, action 0 without random switching or fades. The original 40 fps source timeline and clip duration remain unchanged. Duplicate source frames resend the last valid dirty rectangle, without clearing or blank frames. This is repeated-frame playback, not 50 distinct animation frames.
+- Normal production playback remains unchanged. Build and changed-sector flash hashes passed. Device confirms mode 18, action 0, 40 MHz, **150 presentations and pixel writes per 3000 ms**, with source frame advancing 120 and CRC 0. Physical feedback is pending.
+
+## Presentation cadence comparison (2026-10-20)
+
+- User reports 1.38 changed-row-band mode has **approximately the same flicker, normal imagery**. It reduced transport volume but did not produce a visual improvement in this comparison. Mode 15 remains optional diagnostics; ordinary playback is still the single-rectangle renderer.
+- Firmware **1.39** adds serial-only `steady-30` (mode 16) and `steady-20` (mode 17), using a microsecond presentation deadline. These keep the 40 fps source timeline and clip duration, sampling fewer displayed frames and decoding skipped deltas correctly. They hold action 0 without random actions or fades, use the original single-rectangle output, and preserve SPI/scan/brightness/wiring. Normal mode 0 remains 40 fps and full normal behavior. This is a cadence comparison, not a promise of scan synchronization or a permanent frame-rate downgrade.
+- Build, Python syntax and whitespace checks passed; changed-sector flash hashes verified against the known 1.38 baseline. The 1.39 mode-16 comparison measured presents advance **90 per 3000 ms**, source frame advances **120 per 3000 ms**, CRC 0. User reports the 30 Hz comparison made flicker worse; it was rejected and 40 Hz restored. Mode 17 is available but **not tested yet**. The diagnostic will restore animation/Bridge on cleanup.
+
+## Changed-row-band transport comparison (2026-10-20)
+
+- The completed 1.37 sequence reports: steady animation **obvious flicker**; compute-only frozen image **markedly reduced but slight flicker**; repeated identical LCD transfers without animation computation **slight flicker**; same frozen image with both computation and transfers stopped **no flicker**. This points to multiple workload/update contributions under current conditions but does not identify an electrical cause. The diagnostic was then stopped and Bridge restored.
+- Firmware **1.38** adds serial-only mode 15, `steady-bands`, paired with mode 14 `steady-motion`. Both keep action 0, 40 fps, source duration and no fades/random actions. Mode 15 plans top-to-bottom dirty 8-row bands, skips unchanged regions, and falls back to one rectangle when estimated window overhead outweighs saved pixels. It streams final pixels directly, never clears first. **Ordinary mode 0 remains the previous single-rectangle renderer** pending physical acceptance.
+- Offline analysis across all frame pairs estimates pixel savings of about 25.8% idle, 25.4% listening, 30.5% thinking and 27.6% speaking. This predicts transport reduction, not visual benefit. Runtime adds cumulative pet pixel-byte and window counts for measurement; these counts do not measure SPI electrical integrity.
+- Fixed the diagnostic frozen-hash lifecycle: modes 14/15 no longer capture a moving pose, so a following frozen phase captures the actual last displayed buffer afresh. Earlier 1.37 stale hashes remain documented rather than rewritten as fresh measurements.
+- Build and changed-sector write hashes passed against the fully verified 1.37 private baseline. Direct telemetry confirms firmware 1.38, 40.0 presents/s in both modes, CRC/decode errors 0. Measured samples: **31,159 bytes/present over 18 s** in mode 14 versus **23,155 bytes/present over 51 s** in mode 15; scene phase/sample durations differ. Windows increased from 1.0 to 14.63 per present; example push times decreased from about 12 ms to 9.5 ms. User reports **same flicker, normal imagery**. The diagnostic was stopped and Bridge restored before the cadence test.
+
 ## Steady-motion isolation (2026-10-20)
 
 - Device API confirmed connected firmware 1.36, theme 2, animation enabled, no audio playing and CRC 0. User reports flicker in both ongoing movement/transitions or cannot distinguish them. No change to wiring, brightness, scan profile or source FPS is made for this comparison.
@@ -11,7 +70,7 @@ Last updated: 2026-10-20
 - Direct serial telemetry confirms **1.37, mode 14, action 0, animation enabled, approximately 120 presents/3 seconds, CRC 0**. User reports **obvious flicker, approximately unchanged**, so state transitions and fades are not required to trigger the current symptom.
 - The same session then switched to ordinary `compute-only` on the new sequential-palette firmware. Pixel-write count remained **3465**, presents **3475**, while source updates advanced **3482 to 3602** over 3 seconds. User reports **marked improvement, but a little flicker remains**. This phase may change source action, so it is not a perfectly matched workload comparison. The frozen hash was captured earlier in mode 14 and is stale across this particular phase switch; do not use it to identify the newly frozen pose. Zero further LCD pixel writes is supported by the write counter.
 - Next phase repeats the same frozen viewport without animation computation: mode 2, source updates fixed **6811**, source frame fixed **127**, writes/presents increase **120/3001 ms**, CRC 0. User reports **only slight flicker**. This compares fixed-content LCD transfers against animated content and compute-only; it is not an electrical waveform measurement.
-- The same frozen image is now in `hold`: writes fixed **8459**, presents **8469**, source updates **6811**, frame **127**, CRC 0. Awaiting whether residual flicker remains with both computation and LCD traffic stopped. Preserve this phase until the physical report; no new voltage/scan/wiring change is involved.
+- The same frozen image was then held with writes fixed **8459**, presents **8469**, source updates **6811**, frame **127**, CRC 0. User confirmed **no flicker**. No voltage/scan/wiring change was involved. This completed the phase sequence, after which normal animation and Bridge were restored before the 1.38 transport test.
 - Diagnostic exclusively owns COM9 while Bridge is temporarily stopped; the tool has a 600-second bound and restores normal animation/Bridge on cleanup. No brightness, wiring or scan change has been made. Do not report the steady-playback trial as a flicker fix.
 
 ## Independent Wi-Fi feasibility review (2026-10-20)
@@ -288,3 +347,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start_bridge.ps1
 Install PlatformIO and use `voice-device/platformio.ini` for firmware builds; stop the Bridge before flashing because it owns the serial port.
 
 Runtime data, access keys, API keys, local databases, logs, virtual environments, model weights, and PlatformIO build output must stay out of version control. The GitHub repository is public; publish source and sanitized status only. Rotate any credential that has ever been pasted into a public location.
+
+## Supply-voltage and background questions (2026-10-20)
+
+- Keep the KAC screen on 3V3. ST7789V chip supply specifications do not establish the module VCC rating; no module schematic or verified 5 V regulator has been found. The photographed Q1 alone is not evidence of a regulator. Do not test 5 V merely because the high-scan diagnostic is dim.
+- User asks whether background causes flicker. Current idle asset border is constant and no full-white source frame was found, but content-dependent panel behavior / perceived contrast remains possible. A uniform-background comparison with identical motion, scan and presentation rate is a useful next test; it has not yet been performed.

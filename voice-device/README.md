@@ -1,8 +1,10 @@
 # ESP32-S3 语音设备端
 
-当前排查固件 `voice-device-1.37` 默认使用 [PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet) 蓝发小女仆（主题 2），保留 Emotion Ball（主题 1）供手动选择。1.36 已把动画旋转移到素材生成阶段；访问模式对比指向相关性，但用户反馈闪烁仍未解决，不能认定已修复。60 fps 试验因整帧数据量超过 26.67 MHz SPI 的理论吞吐而回退，当前保留 **40 fps、13 段** 基线。
+当前排查固件 `voice-device-1.39` 默认使用 [PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet) 蓝发小女仆（主题 2），保留 Emotion Ball（主题 1）供手动选择。1.36 已把动画旋转移到素材生成阶段；访问模式对比指向相关性，但用户反馈闪烁仍未解决，不能认定已修复。60 fps 试验因整帧数据量超过 26.67 MHz SPI 的理论吞吐而回退，普通播放保留 **40 fps、13 段** 基线。
 
 1.37 新增串口 `steady-motion`（模式 14）：固定待机动作 0、40 fps 原时间轴、禁用随机动作及淡化，用于区分持续播放与状态切换。用户确认此模式仍明显闪烁；现正对比新版停止传屏但继续计算的结果。普通动画命令或诊断退出恢复全部正常行为，默认开机功能保留。
+
+1.38 新增 `steady-bands`（模式 15）比较按变化行带传屏；实测像素数据少约四分之一，但用户反馈闪烁基本一样、画面正常。1.39 新增 `steady-30`/`steady-20`（模式 16/17），临时以每秒 30/20 次呈现同一段待机，源动作总时长不变，用来测试更新节奏；30 次档已实测计数，实物结论待反馈，20 次档尚未测试。普通模式默认帧率未改变。
 
 通电后无需 Bridge 或网页指令，先完整播放一次约 10 秒的“女仆屈膝礼仪”（动作 9），再通过原有 220 ms 过渡进入待机。开机期间 USB 就绪/休眠通知不会重启动作；录音、思考、说话或错误状态立即优先接管。开机动作不阻塞串口和音频任务。Bridge 新安装或无效旧主题默认选小女仆；有效的手动主题选择仍会保存。离线 HELLO 包含主题、动画、开机动作和帧计数，方便验证未握手时也在自主播放。
 
@@ -212,3 +214,31 @@ cd D:\Codex工作区\desktop-ai-robot
 1.12 将完成的 RGB565 图像与上一帧按 8×8 小块比较，只传变化块；眼睛、嘴巴移走后露出的底色也会被正确传送，不会先擦屏再画。相同帧不传屏。换主题或颜色测试后会完整重画一次。`ball_bytes`、`dirty_tiles`、`diff_buffer` 分别回报球球像素传送字节数、变化块数和比较缓存是否可用；60 Hz 是动作计算节奏，实际传送次数可能因跳过相同帧而减少。
 
 用户已完成录音、回复实物对照，确认 1.12 差分版不再闪烁；当前以此版作为显示基线。
+
+### 1.40 diagnostic comparison
+
+Serial-only `steady-50` (mode 18) repeats final valid pixels at 50 Hz / 40 MHz while retaining the original 40 fps source timeline and duration. No blank frames or extra unique poses are inserted. Normal playback defaults are unchanged; physical flicker feedback is pending. The 30 Hz trial worsened flicker, and 40 Hz at 40 MHz looked approximately unchanged.
+
+### 1.41 diagnostic comparison
+
+Serial-only `steady-60` (mode 19) adds 60 Hz repeated-frame presentation at 40 MHz, preserving the 40 fps source timeline and clip duration. Device confirms 180 presentations per 3 seconds; visual feedback is pending. Normal playback defaults are unchanged.
+
+### 1.42 normal playback and transitions
+
+Normal pet playback now uses 60 Hz repeated presentation at 40 MHz (40 fps source timing retained), including startup and state changes. Same-clip loops retain timeline remainder and skip a new fade. Equivalent state notifications keep the clip running. Real action changes blend from the displayed image with a 220 ms eased opaque crossfade. Physical confirmation of loop/state white-flash improvement is pending.
+
+### 1.43 bounded maximum-scan diagnostic
+
+Serial mode 20 (`steady-limit`) temporarily requests nominal 119 Hz C6 scanning and a 119 Hz presentation target at 40 MHz. Actual presentation throughput must be measured (initially about 75 Hz); the exact module rating is unknown. Normal scan stays 0x0F and ANIMATION/diagnostic cleanup restores it. Run with `--max-seconds 120 --restore-bridge` for a bounded comparison. User reports 1.42 still flickers; no fix is claimed.
+
+### 1.44 selected 75 Hz configuration
+
+Normal pet presentation targets 75 Hz at 40 MHz SPI; normal screen scanning selects C6=0x09 (nominal 75 Hz). Original 40 fps animation source timing is preserved. Startup and animation restoration retain this setting. Live windows show about 74-75 presentations/second; physical brightness/flicker feedback is pending.
+
+### 1.45 slight image dimming
+
+Pet image channel levels use 90% software scaling, consistently applied to palette/background and transition initialization. The selected 75 Hz scan/presentation configuration and existing BLK wiring stay unchanged. This does not lower backlight current.
+
+### 1.46 SPI transaction audit
+
+Window commands and pixel payload now share one CS assertion / SPI transaction. Every pixel writer validates window geometry and expected RGB565 byte counts; `lcd_tx_errors` reports violations. Live sweeps across both themes and work states stayed at zero errors. Three sampled decoded frame hashes also matched host reconstruction before this change. These checks do not read back LCD RAM or establish electrical bus integrity; physical flicker feedback remains pending.

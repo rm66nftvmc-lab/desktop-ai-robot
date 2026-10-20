@@ -19,13 +19,15 @@ static constexpr uint8_t FRAME_THEME=14, FRAME_SCREEN_TEST=15;
 static std::atomic<uint8_t> displayTheme{2};
 static std::atomic<int> pendingTheme{-1};
 static std::atomic<int> pendingFace{-1},pendingColor{-1};
+static constexpr uint8_t LCD_NORMAL_SCAN=0x09; // ST7789 nominal 75 Hz (FRCTRL2).
 static bool screenTaskRunning=false;
-static std::atomic<uint32_t> pendingLcdHz{0},lcdBusHz{26666666};
+static std::atomic<int> pendingLcdScan{-1};
+static std::atomic<uint32_t> pendingLcdHz{0},lcdBusHz{40000000};
 static constexpr uint16_t MAX_PAYLOAD=1024;
 static constexpr int KEY_PIN=1, SAMPLE_RATE=16000;
 static constexpr int LCD_CS=8, LCD_DC=9, LCD_RST=10, LCD_MOSI=11, LCD_SCLK=12;
 static constexpr int LCD_WIDTH=240, LCD_HEIGHT=320;
-static SPISettings lcdSpi(26666666, MSBFIRST, SPI_MODE0);
+static SPISettings lcdSpi(40000000, MSBFIRST, SPI_MODE0);
 static bool micReady=false,speakerReady=false;
 static std::atomic<bool> connected{false},listening{false},playing{false};
 static uint16_t txSequence=0;
@@ -79,24 +81,42 @@ static void lcdCommand(uint8_t command,const uint8_t *data=nullptr,size_t length
   digitalWrite(LCD_CS,HIGH); SPI.endTransaction();
 }
 
+// All window state and SPI calls belong to the display task (setup runs first).
+// Stage the window, then send CASET/RASET/RAMWR and its payload under one CS.
+static int lcdWindow[4]={0,0,LCD_WIDTH-1,LCD_HEIGHT-1};
+static bool lcdWindowValid=true,lcdPixelsOpen=false;
+static size_t lcdExpectedBytes=0,lcdWrittenBytes=0;
+static std::atomic<uint32_t> lcdTxErrors{0};
 static void lcdSetWindow(int x0,int y0,int x1,int y1) {
-  const uint8_t columns[]={static_cast<uint8_t>(x0>>8),static_cast<uint8_t>(x0),
-                           static_cast<uint8_t>(x1>>8),static_cast<uint8_t>(x1)};
-  const uint8_t rows[]={static_cast<uint8_t>(y0>>8),static_cast<uint8_t>(y0),
-                        static_cast<uint8_t>(y1>>8),static_cast<uint8_t>(y1)};
-  lcdCommand(0x2A,columns,sizeof(columns));
-  lcdCommand(0x2B,rows,sizeof(rows));
+  lcdWindowValid=x0>=0&&y0>=0&&x1>=x0&&y1>=y0&&x1<LCD_WIDTH&&y1<LCD_HEIGHT;
+  if(!lcdWindowValid) {++lcdTxErrors;return;}
+  lcdWindow[0]=x0;lcdWindow[1]=y0;lcdWindow[2]=x1;lcdWindow[3]=y1;
 }
-
 static void lcdBeginPixels() {
-  ++lcdPixelWrites;
-  SPI.beginTransaction(lcdSpi);
-  digitalWrite(LCD_CS,LOW); digitalWrite(LCD_DC,LOW); SPI.transfer(0x2C);
-  digitalWrite(LCD_DC,HIGH);
+  if(!lcdWindowValid||lcdPixelsOpen) {++lcdTxErrors;return;}
+  lcdExpectedBytes=size_t(lcdWindow[2]-lcdWindow[0]+1)*(lcdWindow[3]-lcdWindow[1]+1)*2;
+  lcdWrittenBytes=0;
+  SPI.beginTransaction(lcdSpi);digitalWrite(LCD_CS,LOW);
+  digitalWrite(LCD_DC,LOW);SPI.transfer(0x2A);digitalWrite(LCD_DC,HIGH);
+  SPI.transfer(lcdWindow[0]>>8);SPI.transfer(lcdWindow[0]);
+  SPI.transfer(lcdWindow[2]>>8);SPI.transfer(lcdWindow[2]);
+  digitalWrite(LCD_DC,LOW);SPI.transfer(0x2B);digitalWrite(LCD_DC,HIGH);
+  SPI.transfer(lcdWindow[1]>>8);SPI.transfer(lcdWindow[1]);
+  SPI.transfer(lcdWindow[3]>>8);SPI.transfer(lcdWindow[3]);
+  digitalWrite(LCD_DC,LOW);SPI.transfer(0x2C);digitalWrite(LCD_DC,HIGH);
+  lcdPixelsOpen=true;++lcdPixelWrites;
 }
-
+static void lcdWritePixels(const uint8_t *data,size_t bytes) {
+  if(!lcdPixelsOpen||!data||(bytes&1)||bytes>lcdExpectedBytes-lcdWrittenBytes) {
+    ++lcdTxErrors;return;
+  }
+  SPI.writeBytes(data,bytes); // Blocking Arduino HAL: source may be reused only after this returns.
+  lcdWrittenBytes+=bytes;
+}
 static void lcdEndPixels() {
-  digitalWrite(LCD_CS,HIGH); SPI.endTransaction();
+  if(!lcdPixelsOpen) {++lcdTxErrors;return;}
+  if(lcdWrittenBytes!=lcdExpectedBytes)++lcdTxErrors;
+  digitalWrite(LCD_CS,HIGH);SPI.endTransaction();lcdPixelsOpen=false;
 }
 
 static void lcdFillRect(int x0,int y0,int x1,int y1,uint16_t color) {
@@ -108,7 +128,7 @@ static void lcdFillRect(int x0,int y0,int x1,int y1,uint16_t color) {
     lcdRowBytes[x*2+1]=color&0xFF;
   }
   lcdBeginPixels();
-  for (int y=y0;y<=y1;++y) SPI.writeBytes(lcdRowBytes,width*2);
+  for (int y=y0;y<=y1;++y) lcdWritePixels(lcdRowBytes,width*2);
   lcdEndPixels();
 }
 
@@ -165,7 +185,7 @@ static bool qiuqiuPresent(bool full) {
     lcdSetWindow(24+x,64+y,24+x+width-1,64+y+height-1);
     lcdBeginPixels();
     for(int row=y;row<y+height;++row)
-      SPI.writeBytes(lcdFrameBytes+(row*192+x)*2,width*2);
+      lcdWritePixels(lcdFrameBytes+(row*192+x)*2,width*2);
     lcdEndPixels();
     qiuqiuPixelBytes.fetch_add(width*height*2);
     wrote=true;
@@ -284,11 +304,10 @@ static void lcdDrawFace(int index) {
 static void lcdService() {
   int theme=pendingTheme.exchange(-1);
   if(theme>=1 && theme<=2 && theme!=displayTheme) {
-    // Longer jumper-wire display bus: use a conservative pet write clock.
-    // Emotion Ball keeps its previously validated 40 MHz setting.
-    lcdBusHz=theme==2?26666666:40000000;
+    // Keep the 40 MHz bus while using the selected 75 Hz scan/presentation target.
+    lcdBusHz=40000000;
     lcdSpi=SPISettings(lcdBusHz.load(),MSBFIRST,SPI_MODE0);
-    const uint8_t scan=0x0F; // Restore default panel timing after dim high-scan trials.
+    const uint8_t scan=LCD_NORMAL_SCAN; // Selected normal scan; highest-scan mode remains diagnostic.
     lcdCommand(0xC6,&scan,1);
     displayTheme=theme;
     if(theme==2)pet::enter(millis());
@@ -296,6 +315,8 @@ static void lcdService() {
   }
   uint32_t clock=pendingLcdHz.exchange(0);
   if(clock) {lcdBusHz=clock;lcdSpi=SPISettings(clock,MSBFIRST,SPI_MODE0);}
+  int scan=pendingLcdScan.exchange(-1);
+  if(scan>=0) {const uint8_t value=scan;lcdCommand(0xC6,&value,1);}
   int face=pendingFace.exchange(-1);
   if(face>=0) lcdApplyFace(face);
   int color=pendingColor.exchange(-1);
@@ -326,6 +347,7 @@ static void lcdInit() {
   lcdCommand(0x01); delay(150); lcdCommand(0x11); delay(120);
   const uint8_t rgb565=0x55, orientation=0;
   lcdCommand(0x3A,&rgb565,1); lcdCommand(0x36,&orientation,1);
+  lcdCommand(0xC6,&LCD_NORMAL_SCAN,1);
   lcdCommand(0x21); lcdCommand(0x13); delay(10); lcdCommand(0x29); delay(100);
   lcdFill(0x0843);
 }
@@ -378,12 +400,13 @@ static void handleFrame(uint8_t kind,const uint8_t *payload,uint16_t length) {
     lcdDrawFace(listening?FACE_ID_LISTEN:payload[0]);
   } else if (kind==FRAME_THEME && connected && length==1 && payload[0]<=2) {
     pendingTheme=payload[0]==2?2:1;
-  } else if (kind==FRAME_SCREEN_TEST && connected && (length==1||(length==2&&payload[1]<=2)) && payload[0]<=14
+  } else if (kind==FRAME_SCREEN_TEST && connected && (length==1||(length==2&&payload[1]<=2)) && payload[0]<=20
              && displayTheme==2 && !playing && !listening) {
     pendingLcdHz=length==2&&payload[1]==1?20000000:length==2&&payload[1]==2?40000000:26666666;
-    pet::testMode=payload[0];animationEnabled=payload[0]==0||payload[0]==3||payload[0]==8||payload[0]==14;
+    pendingLcdScan=payload[0]==20?0x00:(payload[0]==0?LCD_NORMAL_SCAN:0x0F);
+    pet::testMode=payload[0];animationEnabled=payload[0]==0||payload[0]==3||payload[0]==8||payload[0]>=14;
   } else if (kind==FRAME_ANIMATION && connected && length==1) {
-    pendingLcdHz=displayTheme==2?26666666:40000000;
+    pendingLcdHz=40000000;pendingLcdScan=LCD_NORMAL_SCAN;
     pet::testMode=0;animationEnabled=payload[0]!=0;
   } else if (kind==FRAME_HEARTBEAT && connected) {
     lastHost=millis();
@@ -504,7 +527,7 @@ void loop() {
   if (!connected && millis()-lastHello>=2000) {
     lastHello=millis();
       char hello[256];
-      snprintf(hello,sizeof(hello),"{\"protocol\":1,\"firmware\":\"voice-device-1.37\",\"display_theme\":%u,\"animation_enabled\":%s,\"boot_animation\":%s,\"pet_action\":%lu,\"pet_frame\":%lu,\"presents\":%lu,\"uptime_ms\":%lu}",
+      snprintf(hello,sizeof(hello),"{\"protocol\":1,\"firmware\":\"voice-device-1.46\",\"display_theme\":%u,\"animation_enabled\":%s,\"boot_animation\":%s,\"pet_action\":%lu,\"pet_frame\":%lu,\"presents\":%lu,\"uptime_ms\":%lu}",
         displayTheme.load(),animationEnabled?"true":"false",pet::bootGreeting?"true":"false",
         (unsigned long)pet::action.load(),(unsigned long)pet::frame.load(),(unsigned long)lcdPresents.load(),(unsigned long)millis());
       sendJson(FRAME_HELLO,hello);
@@ -525,6 +548,9 @@ void loop() {
     used=strlen(status);
     snprintf(status+used-1,sizeof(status)-used+1,",\"pet_cache_bytes\":%lu,\"pet_cache_hits\":%lu,\"pet_cache_misses\":%lu}",
       (unsigned long)pet::cacheBytes.load(),(unsigned long)pet::cacheHits.load(),(unsigned long)pet::cacheMisses.load());
+    used=strlen(status);
+    snprintf(status+used-1,sizeof(status)-used+1,",\"pet_pixel_bytes\":%lu,\"pet_windows\":%lu,\"lcd_tx_errors\":%lu}",
+      (unsigned long)pet::pixelBytes.load(),(unsigned long)pet::writeWindows.load(),(unsigned long)lcdTxErrors.load());
     sendJson(FRAME_STATUS,status);
   }
   pollMicrophone();

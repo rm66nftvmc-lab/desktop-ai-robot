@@ -1,6 +1,9 @@
 """Controlled static-screen A/B test. Own COM exclusively; Bridge must be stopped.
 
-Write hold, repeat, compute-only, cpu-load, psram-load, ram-load, flash-load, decode-only, colors-only, combined-load, seq-write, transpose-read, seq-read, steady-motion, motion-normal, motion-slow, motion-fast or stop into --control. Default timeout restores animation.
+Write a named phase or stop into --control. Motion phases include steady-motion,
+steady-bands, steady-fast, steady-50, steady-60, steady-limit, steady-30, steady-20 and motion-normal/slow/fast. Frozen phases
+include hold, repeat, compute-only and the resource-isolation loads below.
+Default timeout restores animation.
 Status JSONL records only hardware telemetry. Pressing the robot button aborts.
 """
 import argparse
@@ -62,9 +65,10 @@ def main():
                         log.write(json.dumps(record)+'\n');log.flush()
                         fields = ['uptime_ms','screen_test','screen_test_hash','pixel_writes',
                                   'pet_action','pet_frame','display_theme','animation_enabled','bad_crc','lcd_spi_hz','presents','source_updates','pet_decode_us','pet_load_us',
-                                  'pet_cache_bytes','pet_cache_hits','pet_cache_misses']
+                                  'pet_cache_bytes','pet_cache_hits','pet_cache_misses','pet_pixel_bytes','pet_windows','push_us']
                         print(json.dumps({'phase':phase, **{k:d.get(k) for k in fields}}),flush=True)
-                        if phase=='steady-motion' and d.get('screen_test')==14:
+                        steady_modes={'steady-motion':14,'steady-fast':14,'steady-bands':15,'steady-30':16,'steady-20':17,'steady-50':18,'steady-60':19,'steady-limit':20}
+                        if phase in steady_modes and d.get('screen_test')==steady_modes[phase]:
                             assert d['pet_action']==0 and d['animation_enabled'], 'Steady idle diagnostic not active'
                         frozen_modes = {'hold':1,'repeat':2,'compute-only':3,'cpu-load':4,'psram-load':5,'ram-load':6,'flash-load':7,'decode-only':8,'colors-only':9,'combined-load':10,'seq-write':11,'transpose-read':12,'seq-read':13}
                         if phase in frozen_modes and d.get('screen_test') == frozen_modes[phase]:
@@ -95,13 +99,14 @@ def main():
                     modes={'hold':(1,0),'repeat':(2,0),'compute-only':(3,0),
                            'cpu-load':(4,0),'psram-load':(5,0),'ram-load':(6,0),'flash-load':(7,0),
                            'decode-only':(8,0),'colors-only':(9,0),'combined-load':(10,0),
-                           'seq-write':(11,0),'transpose-read':(12,0),'seq-read':(13,0),'steady-motion':(14,0),
+                           'seq-write':(11,0),'transpose-read':(12,0),'seq-read':(13,0),'steady-motion':(14,0),'steady-bands':(15,0),
+                           'steady-30':(16,0),'steady-20':(17,0),'steady-fast':(14,2),'steady-50':(18,2),'steady-60':(19,2),'steady-limit':(20,2),
                            'motion-normal':(0,0),'motion-slow':(0,1),'motion-fast':(0,2)}
                     if desired not in modes:
                         raise RuntimeError('Unknown display test phase')
                     if desired != phase:
                         send(protocol.SCREEN_TEST, bytes(modes[desired]))
-                        if desired.startswith('motion-') or desired=='steady-motion':
+                        if desired.startswith(('motion-','steady-')):
                             baseline_hash=None
                         phase=desired;prior=None
                         print('REQUESTED',phase,flush=True)

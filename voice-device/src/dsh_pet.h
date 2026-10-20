@@ -31,12 +31,31 @@ static std::atomic<bool> bootGreeting{false};
 // 11 sequential 56 KB write, 12 transposed read, 13 sequential read.
 // Modes 4-13 keep the displayed image frozen and never write the LCD.
 // 14 plays only idle at the original cadence, without random actions or fades.
+// 15 keeps that same motion but sends cost-selected changed 8-row bands.
+// 16/17 sample that motion at 30/20 presentations per second; source time stays 40 fps.
+// 18/19 present at 50/60 Hz, repeating the last dirty rectangle for duplicate source frames.
+// 20 requests 119 Hz presentation for a temporary maximum-scan comparison.
 // Normal ANIMATION commands clear this mode; no web control enables it.
 static std::atomic<unsigned> testMode{0};
 static std::atomic<uint32_t> testHash{0},loadUs{0};
+static std::atomic<uint32_t> pixelBytes{0},writeWindows{0};
 static bool testCaptured=false;
+static bool steadyTest() {const unsigned mode=testMode;return mode>=14&&mode<=20;}
 static uint32_t u32(const uint8_t *p) {return uint32_t(p[0])|(uint32_t(p[1])<<8)|(uint32_t(p[2])<<16)|(uint32_t(p[3])<<24);}
 static void *alloc(size_t n) {return heap_caps_malloc(n,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);}
+// Modest software image dimming; BLK remains wired to its existing pull-up.
+// Apply once to the palette and background so transitions share the same level.
+constexpr unsigned IMAGE_LEVEL=90;
+static uint16_t dimColor(uint16_t value) {
+  unsigned r=((value>>11)*IMAGE_LEVEL+50)/100;
+  unsigned g=(((value>>5)&63)*IMAGE_LEVEL+50)/100;
+  unsigned b=((value&31)*IMAGE_LEVEL+50)/100;
+  return (r<<11)|(g<<5)|b;
+}
+static uint16_t backgroundColor(int pixel) {
+  const auto p=petBackground+pixel*2;
+  return dimColor((uint16_t(p[0])<<8)|p[1]);
+}
 static inline uint16_t blend(uint16_t x,uint16_t y,unsigned t) {
   if(x==y)return x;
   // Separate green into the high halfword; padding prevents channel carries.
@@ -73,7 +92,7 @@ static bool init() {
   clipOffset=u32(petPack+16);frameOffset=u32(petPack+20);dataOffset=u32(petPack+24);
   deltaCache=(uint8_t**)heap_caps_calloc(u32(petPack+12),sizeof(uint8_t*),MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
   memcpy(palette,petPack+28,512);
-  for(auto &color:palette)color=__builtin_bswap16(color);
+  for(auto &color:palette)color=__builtin_bswap16(dimColor(color));
   memset(last,0,N*2);valid=true;return true;
 }
 static bool makeCacheRoom(uint32_t bytes) {
@@ -187,7 +206,7 @@ static void seek(uint32_t local) {
   frame=local;
 }
 static void start(uint32_t id,uint32_t now) {
-  if(testMode!=14)memcpy(from,last,N*2);
+  if(!steadyTest())memcpy(from,last,N*2);
   action=id;began=now;transition=now;seek(0);
 }
 static void enter(uint32_t now,bool greeting=false) {
@@ -203,18 +222,36 @@ static int target(int f) {
 static void tick(uint32_t now,int current,bool animate,bool force=false) {
   const uint32_t renderStarted=micros();
   if(!init())return;
-  if(!force&&now-lastTick<1000/FPS)return;
+  static uint32_t cadenceUs=0;
+  static unsigned cadenceMode=0;
+  const unsigned mode=testMode;
+  if(mode==0||(mode>=16&&mode<=20)) {
+    const uint32_t period=mode==0?13333:(mode==20?8403:(mode==19?16667:(mode==18?20000:(mode==16?33333:50000)))),currentUs=micros();
+    if(cadenceMode!=mode) {cadenceMode=mode;cadenceUs=currentUs;}
+    const uint32_t elapsed=currentUs-cadenceUs;
+    if(!force&&elapsed<period)return;
+    cadenceUs+=elapsed/period*period;
+  } else {
+    cadenceMode=0;
+    if(!force&&now-lastTick<1000/FPS)return;
+  }
   lastTick=now;
   decodeUs=0;colorUs=0;
   if(backgroundNeeded) {
 
     lcdSetWindow(0,0,239,319);lcdBeginPixels();
-    for(int y=0;y<320;++y) {memcpy(lcdRowBytes,petBackground+y*480,480);SPI.writeBytes(lcdRowBytes,480);}
+    for(int y=0;y<320;++y) {
+      for(int x=0;x<240;++x) {
+        uint16_t value=backgroundColor(y*240+x);
+        lcdRowBytes[x*2]=value>>8;lcdRowBytes[x*2+1]=value;
+      }
+      lcdWritePixels(lcdRowBytes,480);
+    }
     lcdEndPixels();
     backgroundNeeded=false;
     // Crossfade the first character from the matching background, never black.
     for(int y=0;y<W;++y)for(int x=0;x<W;++x) {
-      int p=((y+Y)*240+x+X)*2;last[y*W+x]=petBackground[p]|(uint16_t(petBackground[p+1])<<8);
+      int p=(y+Y)*240+x+X;last[y*W+x]=__builtin_bswap16(backgroundColor(p));
     }
   }
   if(current!=face) {
@@ -224,11 +261,16 @@ static void tick(uint32_t now,int current,bool animate,bool force=false) {
     const bool keepGreeting=bootGreeting&&target(current)==0&&current!=FACE_ID_ERROR;
     face=current;
     if(!keepGreeting)bootGreeting=false;
-    if(!keepGreeting||action!=9)start(keepGreeting?9:target(current),now);
+    const unsigned nextAction=keepGreeting?9:target(current);
+    // Different host states can map to the same clip. Keep its timeline and
+    // current transition instead of restarting the clip on every notification.
+    if(action!=nextAction)start(nextAction,now);
     nextIdle=now+8000+esp_random()%14001;
   }
-  if(!testMode)testCaptured=false;
-  if(testMode&&!force) {
+  // Moving diagnostics do not freeze a pose. Capture afresh only when they
+  // switch to a frozen phase, rather than retaining an old moving-frame hash.
+  if(!testMode||steadyTest())testCaptured=false;
+  if(testMode&&!steadyTest()&&!force) {
     if(!testCaptured) {
       uint8_t row[W*2];uint32_t hash=2166136261u;
       for(int y=0;y<W;++y) {
@@ -240,9 +282,10 @@ static void tick(uint32_t now,int current,bool animate,bool force=false) {
     if(testMode==2) {
       lcdSetWindow(X,Y,X+W-1,Y+W-1);lcdBeginPixels();
       for(int y=0;y<W;++y) {
-        memcpy(lcdRowBytes,last+y*W,W*2);SPI.writeBytes(lcdRowBytes,W*2);
+        memcpy(lcdRowBytes,last+y*W,W*2);lcdWritePixels(lcdRowBytes,W*2);
       }
       lcdEndPixels();++lcdPresents;
+      pixelBytes.fetch_add(N*2);++writeWindows;
     }
     if(testMode>=4&&testMode<=7) {
       // Keep the frozen image untouched. Each mode runs a bounded three-millisecond
@@ -330,16 +373,21 @@ static void tick(uint32_t now,int current,bool animate,bool force=false) {
     if(testMode<=2)return;
   }
   if(!animate&&!force)return;
-  if(testMode==14&&(action!=0||bootGreeting)) {
+  if(steadyTest()&&(action!=0||bootGreeting)) {
     bootGreeting=false;start(0,now);
   }
   if(animate) {
     uint32_t duration=count()*1000/FPS;
     if(now-began>=duration) {
       if(action>=5) {bootGreeting=false;start(0,now);nextIdle=now+8000+esp_random()%14001;}
-      else start(action,now);
+      else {
+        // A loop is not a change of action. Carry the clock remainder forward
+        // and seek the keyframe without recapturing a fade on every loop.
+        began+=(now-began)/duration*duration;
+        seek(0);
+      }
     }
-    if(testMode!=14&&target(face)==0&&action==0&&int32_t(now-nextIdle)>=0) {
+    if(!steadyTest()&&target(face)==0&&action==0&&int32_t(now-nextIdle)>=0) {
       int id;do{id=5+esp_random()%8;}while(id==previousRandom);
       previousRandom=id;++randomCount;start(id,now);
     }
@@ -363,7 +411,10 @@ static void tick(uint32_t now,int current,bool animate,bool force=false) {
     loadUs=micros()-renderStarted;
     return;
   }
-  const unsigned fade=testMode==14?256:min(256u,(now-transition)*256/220);
+  const unsigned linearFade=steadyTest()?256:min(256u,(now-transition)*256/220);
+  // Ease the real action transition at both ends. Blend opaque, complete
+  // source/target images; never fade via black, white or a cleared background.
+  const unsigned fade=(linearFade*linearFade*(768-2*linearFade)+32768)>>16;
   uint32_t blendStarted=micros();
   colors(reinterpret_cast<uint16_t*>(lcdFrameBytes),from,fade);
   if(fade<256)blendUs=micros()-blendStarted;
@@ -372,15 +423,25 @@ static void tick(uint32_t now,int current,bool animate,bool force=false) {
   // Find the final dirty rectangle in internal row scratch. One RAMWR stream
   // avoids a patchwork of separately addressed old/new tiles during scanout.
   int left=W,right=-1,top=W,bottom=-1;
+  int16_t rowLeft[W],rowRight[W];
   uint16_t oldRow[W];
   for(int y=0;y<W;++y) {
+    rowLeft[y]=W;rowRight[y]=-1;
     memcpy(oldRow,last+y*W,W*2);
     auto current=reinterpret_cast<const uint16_t*>(lcdFrameBytes)+y*W;
     if(memcmp(oldRow,current,W*2)==0)continue;
     int lo=0,hi=W-1;
     while(oldRow[lo]==current[lo])++lo;
     while(oldRow[hi]==current[hi])--hi;
+    rowLeft[y]=lo;rowRight[y]=hi;
     left=min(left,lo);right=max(right,hi);top=min(top,y);bottom=y;
+  }
+  // Keep source timing at 40 fps. At 50/60 Hz some source frames repeat;
+  // resend valid final pixels without clearing or advancing the clip early.
+  static int repeatLeft=0,repeatTop=0,repeatRight=W-1,repeatBottom=W-1;
+  if(mode==0||(mode>=18&&mode<=20)) {
+    if(right>=left) {repeatLeft=left;repeatTop=top;repeatRight=right;repeatBottom=bottom;}
+    else {left=repeatLeft;top=repeatTop;right=repeatRight;bottom=repeatBottom;}
   }
   if(right>=left&&testMode!=3) {
     // The shared buffer is sized for Emotion Ball (192 square), leaving room
@@ -388,14 +449,35 @@ static void tick(uint32_t now,int current,bool animate,bool force=false) {
     constexpr int ROWS=16;
     static_assert(N*2+W*ROWS*2<=192*192*2,"transfer scratch exceeds shared buffer");
     auto strip=lcdFrameBytes+N*2;
-    const int bytes=(right-left+1)*2;
-    lcdSetWindow(X+left,Y+top,X+right,Y+bottom);lcdBeginPixels();
-    for(int y=top;y<=bottom;y+=ROWS) {
-      int rows=min(ROWS,bottom-y+1);
-      for(int r=0;r<rows;++r)memcpy(strip+r*bytes,lcdFrameBytes+((y+r)*W+left)*2,bytes);
-      SPI.writeBytes(strip,rows*bytes);
+    auto push=[&](int l,int t,int r,int b) {
+      const int bytes=(r-l+1)*2;
+      lcdSetWindow(X+l,Y+t,X+r,Y+b);lcdBeginPixels();
+      for(int y=t;y<=b;y+=ROWS) {
+        int rows=min(ROWS,b-y+1);
+        for(int row=0;row<rows;++row)memcpy(strip+row*bytes,lcdFrameBytes+((y+row)*W+l)*2,bytes);
+        lcdWritePixels(strip,rows*bytes);
+      }
+      lcdEndPixels();pixelBytes.fetch_add((r-l+1)*(b-t+1)*2);++writeWindows;
+    };
+    struct Band {uint8_t left,top,right,bottom;};
+    Band bands[(W+7)/8];int bandCount=0,bandPixels=0;
+    if(testMode==15) {
+      for(int y=0;y<W;y+=8) {
+        int l=W,r=-1,t=W,b=-1;
+        for(int row=y;row<min(W,y+8);++row)if(rowRight[row]>=0) {
+          l=min(l,int(rowLeft[row]));r=max(r,int(rowRight[row]));t=min(t,row);b=row;
+        }
+        if(r>=l) {
+          bands[bandCount++]={uint8_t(l),uint8_t(t),uint8_t(r),uint8_t(b)};
+          bandPixels+=(r-l+1)*(b-t+1);
+        }
+      }
     }
-    lcdEndPixels();
+    // Allow a small per-window overhead; fall back to one rectangle when
+    // splitting would cost more than the pixels it avoids. Never clear first.
+    if(bandCount&&bandPixels+bandCount*32<(right-left+1)*(bottom-top+1)+32) {
+      for(int i=0;i<bandCount;++i)push(bands[i].left,bands[i].top,bands[i].right,bands[i].bottom);
+    } else push(left,top,right,bottom);
   }
 
   if(testMode!=3)memcpy(last,lcdFrameBytes,N*2);
