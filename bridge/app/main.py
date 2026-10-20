@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import sqlite3
+import threading
 from pathlib import Path
 from urllib.parse import urlparse
 from contextlib import asynccontextmanager
@@ -25,7 +26,7 @@ from .security import (SESSION_SECONDS, Sessions, anchor_path, load_or_create_to
                        record_or_verify_data_dir, resolve_data_dir)
 from .speech import SpeechWorker
 from .storage import add_message, initialize, list_messages, set_delivery, get_setting, set_setting
-from .tts import (SynthesisCancelled, selected_voice, set_selected_voice, synthesize_chunks,
+from .tts import (SynthesisCancelled, selected_voice, set_selected_voice, remember_voice, synthesize_chunks,
                   start_voice_service, stop_voice_services, voice_status,
                   warm_voice)
 from .voice import VoiceConversation
@@ -34,6 +35,7 @@ from .maintenance import BRIDGE_VERSION, MaintenanceStatus, check_database
 from .playback import PlaybackControl
 
 SOURCES = ("hermes", "deepseek_harness", "doubao_web")
+THEME_VOICES = {"dsh_pet": "paimon", "qiuqiu": "cosyvoice"}
 WEB_DIR = Path(__file__).resolve().parents[2] / "web-client"
 
 logger = logging.getLogger("bridge.datadir")
@@ -134,7 +136,9 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
         theme = 'dsh_pet'
         set_setting(database, 'display_theme', theme)
     device.set_theme(2 if theme == 'dsh_pet' else 1)
+    remember_voice(data_dir, THEME_VOICES[theme])
     device.set_quiet_playback(selected_voice(data_dir).startswith('cosyvoice'))
+    theme_voice_lock = threading.Lock()
     voice = VoiceConversation(database, data_dir, device, hermes, audio_output=audio_output,
                               workers={"hermes": hermes, "deepseek_harness": harness},
                               validate_target=conversations.resolve)
@@ -299,9 +303,16 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
         check_origin(request)
         if body.theme not in ('qiuqiu', 'dsh_pet'):
             raise HTTPException(status_code=422, detail='Unknown display theme')
-        set_setting(database, 'display_theme', body.theme)
-        device.set_theme(2 if body.theme == 'dsh_pet' else 1)
-        return {'theme': body.theme, 'queued': True}
+        with theme_voice_lock:
+            try:
+                playback.stop(None)
+                set_selected_voice(data_dir, THEME_VOICES[body.theme])
+            except RuntimeError as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
+            set_setting(database, 'display_theme', body.theme)
+            device.set_quiet_playback(body.theme == 'qiuqiu')
+            device.set_theme(2 if body.theme == 'dsh_pet' else 1)
+        return {'theme': body.theme, 'voice': THEME_VOICES[body.theme], 'queued': True}
 
     @app.post("/api/device/animation", dependencies=[Depends(require_session)])
     def set_animation(body: AnimationBody, request: Request) -> dict:
@@ -368,8 +379,12 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
     def select_voice(body: VoiceBody, request: Request) -> dict:
         check_origin(request)
         try:
-            set_selected_voice(data_dir, body.voice)
-            device.set_quiet_playback(body.voice.startswith('cosyvoice'))
+            with theme_voice_lock:
+                bound_voice = THEME_VOICES[get_setting(database, 'display_theme')]
+                if body.voice != bound_voice:
+                    raise ValueError("声线随显示动画切换，请在显示动画面板选择角色")
+                set_selected_voice(data_dir, body.voice)
+                device.set_quiet_playback(body.voice.startswith('cosyvoice'))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except RuntimeError as exc:

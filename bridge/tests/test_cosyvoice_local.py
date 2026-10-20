@@ -37,8 +37,11 @@ def test_only_installed_local_voices_can_be_selected(tmp_path, monkeypatch):
         tts.set_selected_voice(tmp_path, "cosyvoice-anhui")
     monkeypatch.setattr(cosyvoice_local, "start", lambda _: None)
     monkeypatch.setattr(cosyvoice_local, "status", lambda _: {"ready": True, "running": False})
-    tts.set_selected_voice(tmp_path, "cosyvoice-yue")
-    assert tts.selected_voice(tmp_path) == "cosyvoice-yue"
+    with pytest.raises(ValueError):
+        tts.set_selected_voice(tmp_path, "cosyvoice-yue")
+    tts.set_selected_voice(tmp_path, "cosyvoice")
+    assert tts.selected_voice(tmp_path) == "cosyvoice"
+    assert "cosyvoice-yue" not in {item["id"] for item in tts.voice_status(tmp_path)["voices"]}
     assert "paimon" in {item["id"] for item in tts.voice_status(tmp_path)["voices"]}
 
 

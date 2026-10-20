@@ -134,7 +134,7 @@ def test_voice_target_auth_origin_session_scope_and_harness_callback(tmp_path):
     assert app.state.voice.snapshot()['target'] == {'source': 'hermes', 'session_id': None}
 
 
-def test_voice_selection_is_local_authenticated_and_returns_to_kokoro(tmp_path, monkeypatch):
+def test_voice_selection_is_local_authenticated_and_follows_theme(tmp_path, monkeypatch):
     monkeypatch.setattr("bridge.app.main.set_selected_voice", lambda _dir, voice: (
         (_ for _ in ()).throw(ValueError("Unknown voice")) if voice not in {"kokoro", "paimon"} else None))
     client = TestClient(create_app(tmp_path, token="test-access-token-for-bridge"),
@@ -143,7 +143,8 @@ def test_voice_selection_is_local_authenticated_and_returns_to_kokoro(tmp_path, 
     assert client.post(path, json={"voice": "kokoro"}).status_code == 401
     client.post("/api/login", json={"token": "test-access-token-for-bridge"})
     assert client.post(path, json={"voice": "untrusted"}).status_code == 400
-    assert client.post(path, json={"voice": "kokoro"}).status_code == 200
+    assert client.post(path, json={"voice": "kokoro"}).status_code == 400
+    assert client.post(path, json={"voice": "paimon"}).status_code == 200
 
 
 def test_approval_requires_login_same_origin_and_one_time_choice(tmp_path):

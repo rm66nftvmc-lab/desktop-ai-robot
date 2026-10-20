@@ -205,6 +205,10 @@ p { margin: 0; }
 .audio-controls .muted { font-size: 12px; margin-bottom: 0; }
 .audio-controls .form-error:empty { display: none; }
 .voice-tools-content { padding: 0; }
+#display-panel { max-height: calc(var(--app-height, 100dvh) - 100px); overflow-y: auto; }
+.bound-voice-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+.bound-voice-row span { color: var(--muted); font-size: .85rem; }
+.bound-voice-row strong { font-size: .85rem; }
 .session-groups { padding: 5px 10px 12px; }
 .session-group + .session-group { border-top: 1px solid var(--line); margin-top: 9px; padding-top: 7px; }
 .session-group-header { display: flex; align-items: center; gap: 5px; margin: 2px 0; font-size: .8rem; }

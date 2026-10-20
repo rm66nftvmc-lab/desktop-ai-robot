@@ -62,10 +62,12 @@ def test_embedded_clips_are_complete_seekable_and_fit_flash():
     assert seen == frames
 
 
-def test_dsh_theme_survives_restart_and_usb_reconnect(tmp_path):
+def test_dsh_theme_survives_restart_and_usb_reconnect(tmp_path, monkeypatch):
     import io
     from fastapi.testclient import TestClient
     from bridge.app.main import create_app
+    from bridge.app.tts import remember_voice
+    monkeypatch.setattr("bridge.app.main.set_selected_voice", remember_voice)
     from bridge.app.protocol import Frame, FrameParser, HELLO, THEME
     app = create_app(tmp_path, token='test-access-token')
     assert app.state.device.snapshot()['desired_theme'] == 2  # Fresh installs default to the pet.

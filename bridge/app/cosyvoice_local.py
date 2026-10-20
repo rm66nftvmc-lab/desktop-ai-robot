@@ -12,7 +12,7 @@ import wave
 
 import numpy as np
 
-VOICES = {"cosyvoice": "球球 · 本地中英文", "cosyvoice-yue": "球球 · 本地广东话"}
+VOICES = {"cosyvoice": "球球 · 普通话 / English"}
 _process = None
 _key = ""
 _lock = Lock()
@@ -99,7 +99,7 @@ def synthesize(text, data_dir, voice, cancelled=None):
                 raise RuntimeError("球球本地声线加载超时，请稍后重试") from None
             time.sleep(0.1)
     request = urllib.request.Request("http://127.0.0.1:9881/synthesize",
-        data=json.dumps({"text": text, "mode": "yue" if voice == "cosyvoice-yue" else "auto"}).encode(),
+        data=json.dumps({"text": text, "mode": "auto"}).encode(),
         headers={"Content-Type": "application/json", "X-Worker-Key": _key})
     try:
         with _http.open(request, timeout=180) as response:

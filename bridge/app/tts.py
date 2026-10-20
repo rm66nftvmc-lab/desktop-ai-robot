@@ -124,6 +124,14 @@ def set_selected_voice(data_dir: Path, voice: str) -> None:
     elif voice == "kokoro":
         cosyvoice_local.stop()
     data_dir.mkdir(parents=True, exist_ok=True)
+    remember_voice(data_dir, voice)
+
+
+def remember_voice(data_dir: Path, voice: str) -> None:
+    """Persist a known choice without starting engines during app construction."""
+    if voice not in {"kokoro", "paimon", *cosyvoice_local.VOICES}:
+        raise ValueError("Unknown voice")
+    data_dir.mkdir(parents=True, exist_ok=True)
     temporary = data_dir / "tts-voice.json.tmp"
     temporary.write_text(json.dumps({"voice": voice}, ensure_ascii=False), encoding="utf-8")
     temporary.replace(data_dir / "tts-voice.json")

@@ -2,6 +2,13 @@
 
 Last updated: 2026-10-20
 
+## Character-bound voices and unified audition panel (2026-10-20)
+
+- User requests DSH Pet -> Paimon, Emotion Ball -> local Ball Mandarin/English, removal of Ball Cantonese, and all voice audition controls moved into the display selector panel. Backend theme selection now sets/persists the matching voice under a lock, stops previous playback and queues the theme only after voice selection succeeds. App construction restores the binding without starting models; lifespan starts the selected engine. Legacy independent voice API rejects choices inconsistent with the selected theme.
+- Removed the `cosyvoice-yue` product voice and its Cantonese synthesis mode routing. Shared CosyVoice weights remain because the Mandarin/English voice needs them. Paimon's existing English handling is unchanged. Missing model errors leave the previous display selection and voice config intact.
+- Display panel now contains the bound voice label, Mandarin/English/mixed test presets, custom text and playback/error controls. Removed the independent voice icon/panel and free voice selector. Audition waits while a theme change is pending; changing audition language does not change the bound voice. The panel scrolls within mobile viewport height. Asset versions are app 29 / CSS 22.
+- Validation: **149 backend tests and 18 Node interaction tests passed**, including persisted binding/restart, rejection of detached voices, missing-model preservation and HTML control ownership. Live authenticated API switching verified Ball/cosyvoice and Pet/paimon with device connected; restored the prior DSH Pet selection. Updated page assets are served. Bridge restarted; firmware 1.51 unchanged. No unsolicited audio playback or shared model-file deletion was performed. Browser pixel-level visual validation was not performed.
+
 ## Bridge draft and background-tab maintenance (2026-10-20)
 
 - User accepts the current display configuration and asks to continue optimizing Bridge. Firmware stays at 1.51; the acceptance fixes the desired configuration and does not establish a flicker root-cause fix.

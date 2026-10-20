@@ -12,7 +12,7 @@ const targets = {
 let lastMessageVersion = "";
 let messagesLoading = false;
 let playbackRequestId = 0;
-let voiceChangePending = false;
+let lastTestVoice = "";
 let voicePresetInitialized = false;
 let activePlayback = null;
 let pendingApproval = null;
@@ -739,26 +739,16 @@ async function refreshStatus() {
     $("#maintenance-warning").hidden = !warning;
     if (!audioPending && !volumeTimer && status.audio_output) renderAudioOutput(status.audio_output);
     const voiceStatus = status.tts || {};
-    const paimonOption = $("#voice-select option[value='paimon']");
-    paimonOption.disabled = !voiceStatus.paimon_ready;
-    for (const voice of voiceStatus.voices || []) {
-      const option = [...$("#voice-select").options].find((item) => item.value === voice.id);
-      if (option) option.disabled = !voice.ready;
-    }
-    if (!voiceChangePending) {
-      const activeVoice = voiceStatus.active || "kokoro";
-      $("#voice-select").value = activeVoice;
-      const localBall = activeVoice.startsWith("cosyvoice");
-      $("#voice-presets").hidden = !localBall;
-      if (localBall && !voicePresetInitialized) {
-        $("#voice-test-language").value = activeVoice === "cosyvoice-yue" ? "yue" : "zh";
-        $("#speak-text").value = voiceTestPreset($("#voice-test-language").value).text;
-        voicePresetInitialized = true;
-      }
+    const activeVoice = voiceStatus.active || "paimon";
+    $("#bound-voice").textContent = activeVoice === "cosyvoice" ? "球球 · 普通话 / English" : "派蒙";
+    if (!displayPending && (!voicePresetInitialized || lastTestVoice !== activeVoice)) {
+      $("#voice-test-language").value = "zh";
+      $("#speak-text").value = voiceTestPreset("zh").text;
+      voicePresetInitialized = true; lastTestVoice = activeVoice;
     }
     const connected = status.hermes?.available;
     const voiceTarget = status.voice?.target;
-    if (voiceTarget) $("#voice-tools-toggle").title = `语音工具 · 按键录音目标：${targets[voiceTarget.source]?.title || "未选择"}`;
+    if (voiceTarget) $("#display-toggle").title = `语音工具 · 按键录音目标：${targets[voiceTarget.source]?.title || "未选择"}`;
     const voiceError = status.voice?.state === "error" ? status.voice.last_error || "语音处理失败" : "";
     if (voiceError && voiceError !== lastVoiceError) $("#playback-status").textContent = `按键语音：${voiceError}`;
     lastVoiceError = voiceError;
@@ -945,68 +935,30 @@ $("#composer").addEventListener("submit", async (event) => {
 
 $("#tts-form").addEventListener("submit", async (event) => {
   event.preventDefault();
-  if (voiceChangePending) return;
-  if ($("#voice-select").value.startsWith("cosyvoice")) {
-    const preset = voiceTestPreset($("#voice-test-language").value);
-    if ($("#voice-select").value !== preset.voice && !await chooseVoice(preset.voice)) return;
-  }
+  if (displayPending) return;
   await playSpeech($("#speak-text").value, $("#tts-form button[type=submit]"), $("#tts-error"));
 });
 
 function voiceTestPreset(language) {
+  const name = $("#display-theme").value === "dsh_pet" ? "派蒙" : "球球";
+  const english = name === "派蒙" ? "Paimon" : "your robot";
   return {
-    zh: {voice:"cosyvoice", text:"你好，我是球球，很高兴见到你。"},
-    en: {voice:"cosyvoice", text:"Hello, I am your robot. Nice to meet you."},
-    mixed: {voice:"cosyvoice", text:"你好，我是球球。Hello, I am your robot. 很高兴见到你。"},
-    yue: {voice:"cosyvoice-yue", text:"你好呀，我係球球，好高興識到你。"},
+    zh: { text: `你好，我是${name}，很高兴见到你。` },
+    en: { text: `Hello, I am ${english}. Nice to meet you.` },
+    mixed: { text: `你好，我是${name}。Hello, I am ${english}. 很高兴见到你。` },
   }[language];
 }
 
-async function chooseVoice(voice) {
-  voiceChangePending = true;
-  $("#voice-select").disabled = true;
-  $("#voice-test-language").disabled = true;
-  $("#tts-form button[type=submit]").disabled = true;
-  $("#tts-error").textContent = "";
-  try {
-    await request("/api/tts/voice", {
-      method: "POST", body: JSON.stringify({ voice }),
-    });
-    return true;
-  } catch (error) {
-    $("#tts-error").textContent = error.message;
-    return false;
-  } finally {
-    voiceChangePending = false;
-    $("#voice-select").disabled = false;
-    $("#voice-test-language").disabled = false;
-    $("#tts-form button[type=submit]").disabled = false;
-    await refreshStatus();
-  }
-}
-
-$("#voice-select").addEventListener("change", async (event) => {
-  const voice = event.currentTarget.value;
-  if (voice.startsWith("cosyvoice")) {
-    $("#voice-test-language").value = voice === "cosyvoice-yue" ? "yue" : "zh";
-    $("#speak-text").value = voiceTestPreset($("#voice-test-language").value).text;
-    voicePresetInitialized = true;
-  }
-  await chooseVoice(voice);
-});
-
-$("#voice-test-language").addEventListener("change", async (event) => {
-  const preset = voiceTestPreset(event.currentTarget.value);
-  $("#speak-text").value = preset.text;
+$("#voice-test-language").addEventListener("change", (event) => {
+  $("#speak-text").value = voiceTestPreset(event.currentTarget.value).text;
   voicePresetInitialized = true;
-  if ($("#voice-select").value !== preset.voice) await chooseVoice(preset.voice);
 });
 
 let displayPending = false;
 function setDisplayPanel(open) {
   $("#display-panel").hidden = !open;
   $("#display-toggle").setAttribute("aria-expanded", String(open));
-  if (open) { setVolumePanel(false); setVoicePanel(false); }
+  if (open) { setVolumePanel(false); }
 }
 $("#display-toggle").addEventListener("click", () => setDisplayPanel($("#display-panel").hidden));
 $("#display-panel").addEventListener("keydown", (event) => {
@@ -1015,33 +967,26 @@ $("#display-panel").addEventListener("keydown", (event) => {
 $("#display-theme").addEventListener("change", async (event) => {
   displayPending = true;
   event.target.disabled = true;
+  $("#tts-form button[type=submit]").disabled = true;
+  $("#voice-test-language").disabled = true;
   $("#display-error").textContent = "";
   try {
-    await request("/api/device/theme", { method: "POST", body: JSON.stringify({ theme: event.target.value }) });
+    await request("/api/device/theme", { method: "POST", timeout: 120000, body: JSON.stringify({ theme: event.target.value }) });
     $("#display-state").textContent = "已保存，等待设备应用…";
   } catch (error) { $("#display-error").textContent = error.message; }
-  finally { displayPending = false; event.target.disabled = false; await refreshStatus(); }
+  finally { displayPending = false; event.target.disabled = false; $("#tts-form button[type=submit]").disabled = false; $("#voice-test-language").disabled = false; await refreshStatus(); }
 });
 
 function setVolumePanel(open) {
   $("#audio-panel").hidden = !open;
   $("#volume-toggle").setAttribute("aria-expanded", String(open));
-  if (open) { setVoicePanel(false); setDisplayPanel(false); }
+  if (open) { setDisplayPanel(false); }
 }
-function setVoicePanel(open) {
-  $("#voice-tools-panel").hidden = !open;
-  $("#voice-tools-toggle").setAttribute("aria-expanded", String(open));
-  if (open) { setVolumePanel(false); setDisplayPanel(false); }
-}
-$("#voice-tools-toggle").addEventListener("click", () => setVoicePanel($("#voice-tools-panel").hidden));
 $("#volume-toggle").addEventListener("click", () => {
   setVolumePanel($("#audio-panel").hidden);
 });
 document.addEventListener("click", (event) => {
-  if (!event.target.closest(".device-audio-group")) { setVolumePanel(false); setVoicePanel(false); setDisplayPanel(false); }
-});
-$("#voice-tools-panel").addEventListener("keydown", (event) => {
-  if (event.key === "Escape") { setVoicePanel(false); $("#voice-tools-toggle").focus(); }
+  if (!event.target.closest(".device-audio-group")) { setVolumePanel(false); setDisplayPanel(false); }
 });
 $("#audio-panel").addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
