@@ -187,6 +187,7 @@ test('switching away from a deleted session keeps partial failure visible and se
     sessionCatalogs: { hermes: { items: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] } },
     sessionBulkState: { hermes: { active: true, selected: new Set(['a', 'b']) } },
     sessionsLoading: null, renderSessions() {}, refreshSessions: async () => {},
+    drafts: ui.drafts(null), draftContext: null,
     rememberSession(target, id) { context.selectedSessions[target] = id; },
     selectConversation() { context.sessionActionError = ''; element('#session-error').textContent = ''; },
     request: async () => ({ deleted: [{ session_id: 'a' }], failed: [{ session_id: 'b', error: 'busy' }] }),
@@ -197,4 +198,132 @@ test('switching away from a deleted session keeps partial failure visible and se
   assert.deepEqual([...context.sessionBulkState.hermes.selected], ['b']);
   assert.equal(context.sessionBulkState.hermes.active, true);
   assert.equal(context.sessionDeleteInProgress, false);
+});
+
+function memoryStorage() {
+  const data = new Map();
+  return { get length() { return data.size; }, key: (i) => [...data.keys()][i],
+    getItem: (key) => data.get(key) ?? null, setItem: (key, value) => data.set(key, value),
+    removeItem: (key) => data.delete(key) };
+}
+
+test('drafts survive reload and stay separate across AI and sessions', () => {
+  const storage = memoryStorage(), drafts = ui.drafts(storage);
+  drafts.save('hermes:one', 'first draft');
+  drafts.save('hermes:two', 'second draft');
+  drafts.save('deepseek_harness:one', 'different AI');
+  const reloaded = ui.drafts(storage);
+  assert.equal(reloaded.read('hermes:one'), 'first draft');
+  assert.equal(reloaded.read('hermes:two'), 'second draft');
+  assert.equal(reloaded.read('deepseek_harness:one'), 'different AI');
+  reloaded.save('hermes:one', '');
+  assert.equal(ui.drafts(storage).read('hermes:one'), '');
+  assert.equal(ui.drafts(storage).read('hermes:two'), 'second draft');
+  storage.setItem('conversation:source', 'hermes');
+  reloaded.clear();
+  assert.equal(storage.length, 1);
+  assert.equal(reloaded.read('hermes:two'), '');
+});
+
+test('unavailable draft storage keeps edits in memory without breaking typing', () => {
+  const drafts = ui.drafts({ getItem() { throw Error('disabled'); }, setItem() { throw Error('full'); } });
+  assert.equal(drafts.read('hermes:one'), '');
+  drafts.save('hermes:one', 'still here');
+  assert.equal(drafts.read('hermes:one'), 'still here');
+});
+
+function composerHarness(request, refreshSessions = async () => {}) {
+  const fs = require('node:fs'), vm = require('node:vm');
+  const code = fs.readFileSync(require.resolve('../app.js'), 'utf8');
+  let submit;
+  const button = { disabled: false }, error = { textContent: '' };
+  const context = vm.createContext({
+    source: { value: 'hermes' }, selectedSessions: { hermes: 'one' },
+    prompt: { value: 'same text', focus() { this.focused = true; } },
+    drafts: ui.drafts(null), sessionDeleteInProgress: false,
+    conversationTargets: ['hermes', 'deepseek_harness'], targets: { hermes: { title: 'Hermes' } },
+    $: (selector) => selector === '#composer' ? { addEventListener(_event, handler) { submit = handler; } } :
+      selector === '#send-error' ? error : button,
+    request, refreshSessions, refreshMessages: async () => {},
+  });
+  vm.runInContext(code.slice(code.indexOf('function answerContext('), code.indexOf('function currentAnswerTask(')), context);
+  vm.runInContext(code.slice(code.indexOf('$("#composer").addEventListener'), code.indexOf('$("#tts-form").addEventListener')), context);
+  context.drafts.save('hermes:one', context.prompt.value);
+  return { context, submit: () => submit({ preventDefault() {} }), button, error };
+}
+
+test('late send confirmation cannot clear identical text in another session', async () => {
+  let finish, payload;
+  const h = composerHarness((_path, options) => { payload = JSON.parse(options.body); return new Promise(resolve => { finish = resolve; }); });
+  const pending = h.submit();
+  h.context.selectedSessions.hermes = 'two';
+  h.context.drafts.save('hermes:two', 'same text');
+  finish({ delivery: 'queued' }); await pending;
+  assert.equal(payload.session_id, 'one');
+  assert.equal(h.context.prompt.value, 'same text');
+  assert.equal(h.context.drafts.read('hermes:two'), 'same text');
+  assert.equal(h.context.drafts.read('hermes:one'), '');
+  assert.equal(h.context.prompt.focused, undefined);
+});
+
+test('send confirmation preserves edits made while the request is pending', async () => {
+  let finish, attempts = 0;
+  const h = composerHarness(() => { attempts++; return new Promise(resolve => { finish = resolve; }); });
+  const pending = h.submit();
+  await h.submit();
+  assert.equal(attempts, 1);
+  h.context.prompt.value = 'next message';
+  h.context.drafts.save('hermes:one', 'next message');
+  finish({ delivery: 'queued' }); await pending;
+  assert.equal(h.context.prompt.value, 'next message');
+  assert.equal(h.context.drafts.read('hermes:one'), 'next message');
+  assert.equal(h.button.disabled, false);
+});
+
+test('switching while resolving a missing session never sends into the new session', async () => {
+  let finish, attempts = 0;
+  const h = composerHarness(async () => { attempts++; }, () => new Promise(resolve => { finish = resolve; }));
+  h.context.selectedSessions.hermes = '';
+  const pending = h.submit();
+  h.context.selectedSessions.hermes = 'two';
+  finish(); await pending;
+  assert.equal(attempts, 0);
+  assert.equal(h.context.prompt.value, 'same text');
+  assert.equal(h.button.disabled, false);
+  assert.match(h.error.textContent, /本次未发送/);
+});
+
+test('real draft switching saves old text and restores each session on return', () => {
+  const fs = require('node:fs'), vm = require('node:vm');
+  const code = fs.readFileSync(require.resolve('../app.js'), 'utf8');
+  const context = vm.createContext({ key: 'hermes:one', draftContext: null,
+    drafts: ui.drafts(null), prompt: { value: '' }, answerContext() { return context.key; } });
+  vm.runInContext(code.slice(code.indexOf('function syncDraftContext('), code.indexOf('prompt.addEventListener("input"')), context);
+  context.syncDraftContext(); context.prompt.value = 'unfinished Hermes message';
+  context.key = 'deepseek_harness:two'; context.syncDraftContext();
+  assert.equal(context.prompt.value, '');
+  context.prompt.value = 'unfinished Harness message';
+  context.key = 'hermes:one'; context.syncDraftContext();
+  assert.equal(context.prompt.value, 'unfinished Hermes message');
+  context.key = 'deepseek_harness:two'; context.syncDraftContext();
+  assert.equal(context.prompt.value, 'unfinished Harness message');
+});
+
+test('background tab pauses periodic reads and foreground return refreshes immediately', () => {
+  const fs = require('node:fs'), vm = require('node:vm');
+  const code = fs.readFileSync(require.resolve('../app.js'), 'utf8');
+  const intervals = [], handlers = new Map(), calls = [];
+  const context = vm.createContext({ workspace: { hidden: false }, lastVoiceTargetKey: '',
+    document: { visibilityState: 'hidden', addEventListener(name, fn) { handlers.set(name, fn); } },
+    window: { addEventListener() {} }, setInterval(fn) { intervals.push(fn); },
+    syncVoiceTarget() { calls.push('voice'); }, refreshStatus() { calls.push('status'); },
+    refreshSessions() { calls.push('sessions'); }, refreshMessages() { calls.push('messages'); },
+    refreshTasks() { if (context.document.visibilityState === 'visible') calls.push('tasks'); },
+  });
+  vm.runInContext(code.slice(code.indexOf('document.addEventListener("visibilitychange"'),
+    code.indexOf('// Keep the composer above Android')), context);
+  for (const interval of intervals) interval();
+  assert.deepEqual(calls, []);
+  context.document.visibilityState = 'visible'; handlers.get('visibilitychange')();
+  assert.deepEqual(calls, ['voice', 'status', 'sessions', 'messages', 'tasks']);
 });

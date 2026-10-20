@@ -2,6 +2,14 @@
 
 Last updated: 2026-10-20
 
+## Bridge draft and background-tab maintenance (2026-10-20)
+
+- User accepts the current display configuration and asks to continue optimizing Bridge. Firmware stays at 1.51; the acceptance fixes the desired configuration and does not establish a flicker root-cause fix.
+- Browser drafts are isolated by AI/session in tab-scoped sessionStorage, survive a page reload, and fall back to in-memory storage when browser persistence is unavailable. Only confirmed deleted sessions lose their drafts; explicit logout clears all Bridge drafts. Drafts are not sent to the server or AI until submission.
+- Submission pins its AI/session before posting, rejects context changes while an unresolved session lookup is pending, prevents duplicate in-flight submission, and scopes success/error/focus handling to the originating context. Late confirmations preserve newly typed text and identical input in a different session. Uncertain write outcomes are not retried automatically.
+- Hidden tabs suspend the existing periodic status/history/session/task reads; visibility return immediately refreshes all four and resynchronizes the hardware voice target. Browser asset cache versions advance to app 28 / ui-state 2; backend APIs and firmware are unchanged by this maintenance.
+- Validation: **18 Node interaction tests and 146 Bridge tests passed**, JavaScript syntax and whitespace checks passed. Live authenticated HTTP checks confirm the latest HTML/JS assets are served and the robot remains connected on 1.51. No paid model calls, real chat deletion or robot firmware reflash was needed for the Bridge changes. Browser visual testing was not performed in this turn; the layout is unchanged.
+
 ## Eased action transitions restored (2026-10-20)
 
 - User reports the no-crossfade trial looks like abrupt cuts and requests transitions back; no definitive flash verdict was provided for that trial. Firmware **1.51** restores `ACTION_CROSSFADE=true` and its existing 220 ms eased opaque blend. Normal source interpolation, selected 90 Hz settings and 100% software image level are retained.

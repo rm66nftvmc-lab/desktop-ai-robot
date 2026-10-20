@@ -41,6 +41,19 @@ let statusLoading = false;
 let answerTasks = [];
 let tasksContext = "";
 let tasksLoading = false;
+const drafts = BridgeUI.drafts((() => { try { return sessionStorage; } catch { return null; } })());
+let draftContext = null;
+
+function syncDraftContext() {
+  const next = answerContext();
+  if (next === draftContext) return;
+  if (draftContext !== null) drafts.save(draftContext, prompt.value);
+  prompt.value = drafts.read(next);
+  draftContext = next;
+}
+
+prompt.addEventListener("input", () => { if (draftContext !== null) drafts.save(draftContext, prompt.value); });
+window.addEventListener("pagehide", () => { if (draftContext !== null) drafts.save(draftContext, prompt.value); });
 
 function answerContext() { return `${source.value}:${selectedSessions[source.value] || ""}`; }
 
@@ -299,7 +312,6 @@ function selectConversation(target, id) {
   rememberSession(target, id);
   source.value = target;
   try { sessionStorage.setItem("conversation:source", target); } catch {}
-  prompt.value = "";
   $("#send-error").textContent = "";
   $("#session-status").textContent = "";
   $("#session-error").textContent = "";
@@ -368,6 +380,11 @@ async function deleteConversations(target, items, button) {
       $("#session-status").textContent = `已处理 ${Math.min(offset + 5, items.length)} / ${items.length} 个会话`;
     }
     const deletedIds = new Set((result.deleted || []).map((item) => item.session_id));
+    for (const id of deletedIds) {
+      const context = `${target}:${id}`;
+      drafts.save(context, "");
+      if (draftContext === context) { draftContext = null; prompt.value = ""; }
+    }
     const failures = (result.failed || []).map((failure) => {
       const item = items.find((candidate) => candidate.id === failure.session_id);
       return `${item?.title || "未命名会话"}：${failure.error}`;
@@ -672,6 +689,7 @@ document.addEventListener("pointerup", (event) => {
 document.addEventListener("pointercancel", () => { sidebarSwipeStart = null; }, { passive: true });
 
 function setTarget() {
+  syncDraftContext();
   const target = targets[source.value];
   $("#conversation-title").textContent = target.title;
   prompt.placeholder = target.placeholder;
@@ -890,26 +908,39 @@ $("#login-form").addEventListener("submit", async (event) => {
 
 $("#composer").addEventListener("submit", async (event) => {
   event.preventDefault();
-  const text = prompt.value.trim();
-  if (!text) return;
+  const submitted = prompt.value, text = submitted.trim();
+  if (!text || sessionDeleteInProgress) return;
   const button = $("#composer button[type=submit]");
+  if (button.disabled) return;
+  const target = source.value, initialContext = answerContext();
+  let session = selectedSessions[target] || "";
+  let context = initialContext;
   const errorBox = $("#send-error");
   errorBox.textContent = "";
   button.disabled = true;
   try {
-    const target = source.value;
-    if (conversationTargets.includes(target) && !selectedSessions[target]) {
+    if (conversationTargets.includes(target) && !session) {
       await refreshSessions();
-      if (!selectedSessions[target]) throw new Error("请先在侧栏新建或选择一个会话。");
+      if (source.value !== target || answerContext() !== initialContext) {
+        const error = new Error("会话已切换，本次未发送；请在当前会话确认后重新发送。");
+        error.contextChanged = true;
+        throw error;
+      }
+      session = selectedSessions[target] || "";
+      if (!session) throw new Error("请先在侧栏新建或选择一个会话。");
+      context = `${target}:${session}`;
     }
     const result = await request("/api/messages", { method: "POST", body: JSON.stringify({
-      source: target, text, session_id: selectedSessions[target] || null,
+      source: target, text, session_id: session || null,
     }) });
-    if (source.value === target && prompt.value.trim() === text) prompt.value = "";
-    if (result.delivery === "failed") errorBox.textContent = `${targets[target].title} 暂时无法接收；消息已保存。`;
+    if (drafts.read(context) === submitted) drafts.save(context, "");
+    if (answerContext() === context) {
+      if (prompt.value === submitted) { prompt.value = ""; drafts.save(context, ""); }
+      if (result.delivery === "failed") errorBox.textContent = `${targets[target].title} 暂时无法接收；消息已保存。`;
+    }
     await refreshMessages();
-  } catch (error) { errorBox.textContent = error.message; }
-  finally { button.disabled = false; prompt.focus(); }
+  } catch (error) { if (answerContext() === context || error.contextChanged) errorBox.textContent = error.message; }
+  finally { button.disabled = false; if (answerContext() === context) prompt.focus(); }
 });
 
 $("#tts-form").addEventListener("submit", async (event) => {
@@ -1046,7 +1077,9 @@ source.addEventListener("change", () => {
   setTarget(); renderSessions(); syncVoiceTarget(); refreshStatus(); refreshMessages();
 });
 $("#logout").addEventListener("click", async () => {
-  try { await request("/api/logout", { method: "POST" }); } finally { showLogin(); }
+  try { await request("/api/logout", { method: "POST" }); } finally {
+    drafts.clear(); draftContext = null; prompt.value = ""; showLogin();
+  }
 });
 
 setTarget();
@@ -1055,12 +1088,14 @@ document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible" && !workspace.hidden) {
     lastVoiceTargetKey = "";
     syncVoiceTarget();
+    refreshStatus(); refreshSessions(); refreshMessages(); refreshTasks();
   }
 });
 window.addEventListener("focus", () => { if (!workspace.hidden) { lastVoiceTargetKey = ""; syncVoiceTarget(); } });
-setInterval(() => { if (!workspace.hidden) refreshMessages(); }, 2000);
-setInterval(() => { if (!workspace.hidden) { refreshStatus(); } }, 2000);
-setInterval(() => { if (!workspace.hidden) refreshSessions(); }, 6000);
+const canPoll = () => !workspace.hidden && document.visibilityState === "visible";
+setInterval(() => { if (canPoll()) refreshMessages(); }, 2000);
+setInterval(() => { if (canPoll()) refreshStatus(); }, 2000);
+setInterval(() => { if (canPoll()) refreshSessions(); }, 6000);
 setInterval(refreshTasks, 500);
 
 // Keep the composer above Android/iOS on-screen keyboards.

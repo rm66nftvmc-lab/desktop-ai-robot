@@ -1,6 +1,36 @@
 /* Pure interaction rules shared with the browser regression tests. */
 (function (root) {
   const api = {
+    drafts(storage) {
+      const prefix = "bridge:draft:", memory = new Map();
+      return {
+        read(context) {
+          if (memory.has(context)) return memory.get(context);
+          let value = "";
+          try { value = storage?.getItem(prefix + context) || ""; } catch {}
+          value = value.slice(0, 4000);
+          memory.set(context, value);
+          return value;
+        },
+        save(context, value) {
+          value = String(value).slice(0, 4000);
+          memory.set(context, value);
+          try {
+            if (value) storage?.setItem(prefix + context, value);
+            else storage?.removeItem(prefix + context);
+          } catch {} // A full/disabled tab store must not prevent typing.
+        },
+        clear() {
+          memory.clear();
+          try {
+            for (let i = storage.length - 1; i >= 0; i--) {
+              const key = storage.key(i);
+              if (key?.startsWith(prefix)) storage.removeItem(key);
+            }
+          } catch {}
+        },
+      };
+    },
     deletionOutcome(items, result) {
       const deleted = new Set((result.deleted || []).map((item) => item.session_id));
       const errors = new Map((result.failed || []).map((item) => [item.session_id, item.error]));
