@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>桌面 AI 机器人 · Bridge</title>
-  <link rel="stylesheet" href="/assets/style.css?v=22">
+  <link rel="stylesheet" href="/assets/style.css?v=23">
 </head>
 <body>
   <section id="login" class="login-screen">
@@ -123,6 +123,10 @@
       <div id="messages" class="timeline" role="log" aria-label="对话消息" aria-live="polite" aria-relevant="additions text"></div>
 
       <div class="composer-dock">
+        <div id="readonly-session" class="readonly-session" hidden>
+          <span>此 Hermes 桌面会话只能查看。新建 Bridge 会话后可发送文字和按键录音。</span>
+          <button type="button" id="readonly-new" class="secondary-button">新建可回复会话</button>
+        </div>
         <p id="task-status" class="task-status" role="status" aria-live="polite">准备就绪</p>
         <p id="maintenance-warning" class="form-error" role="status" hidden></p>
         <form id="composer" class="composer">
@@ -140,6 +144,6 @@
     </main>
   </div>
   <script src="/assets/ui-state.js?v=2" defer></script>
-  <script src="/assets/app.js?v=29" defer></script>
+  <script src="/assets/app.js?v=30" defer></script>
 </body>
 </html>

@@ -229,11 +229,12 @@ function composerHarness(request, refreshSessions = async () => {}) {
   const fs = require('node:fs'), vm = require('node:vm');
   const code = fs.readFileSync(require.resolve('../app.js'), 'utf8');
   let submit;
-  const button = { disabled: false }, error = { textContent: '' };
+  const button = { disabled: false, addEventListener() {} }, error = { textContent: '' };
   const context = vm.createContext({
     source: { value: 'hermes' }, selectedSessions: { hermes: 'one' },
+    sessionCatalogs: {},
     prompt: { value: 'same text', focus() { this.focused = true; } },
-    drafts: ui.drafts(null), sessionDeleteInProgress: false,
+    drafts: ui.drafts(null), sessionDeleteInProgress: false, sendPending: false, currentSessionReadOnly: () => false,
     conversationTargets: ['hermes', 'deepseek_harness'], targets: { hermes: { title: 'Hermes' } },
     $: (selector) => selector === '#composer' ? { addEventListener(_event, handler) { submit = handler; } } :
       selector === '#send-error' ? error : button,
@@ -271,6 +272,15 @@ test('send confirmation preserves edits made while the request is pending', asyn
   assert.equal(h.context.prompt.value, 'next message');
   assert.equal(h.context.drafts.read('hermes:one'), 'next message');
   assert.equal(h.button.disabled, false);
+});
+
+test('desktop read-only session blocks submission before sending anything', async () => {
+  let attempts = 0;
+  const h = composerHarness(async () => { attempts++; });
+  h.context.sessionCatalogs.hermes = { items: [{ id: 'one', read_only: true }] };
+  await h.submit();
+  assert.equal(attempts, 0);
+  assert.equal(h.context.prompt.value, 'same text');
 });
 
 test('switching while resolving a missing session never sends into the new session', async () => {

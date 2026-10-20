@@ -209,6 +209,8 @@ p { margin: 0; }
 .bound-voice-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
 .bound-voice-row span { color: var(--muted); font-size: .85rem; }
 .bound-voice-row strong { font-size: .85rem; }
+.readonly-session { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px; border: 1px solid var(--line); border-radius: 10px; color: var(--muted); font-size: .85rem; }
+.readonly-session[hidden] { display: none; }
 .session-groups { padding: 5px 10px 12px; }
 .session-group + .session-group { border-top: 1px solid var(--line); margin-top: 9px; padding-top: 7px; }
 .session-group-header { display: flex; align-items: center; gap: 5px; margin: 2px 0; font-size: .8rem; }

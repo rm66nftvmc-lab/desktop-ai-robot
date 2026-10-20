@@ -2,6 +2,14 @@
 
 Last updated: 2026-10-20
 
+## Hermes reply recovery and read-only session visibility (2026-10-20)
+
+- User reports no replies. Live state showed successful recording recognition but Hermes worker rejected the selected desktop-origin conversation: Runs API permits writes only to `api_server` / `bot_room` sessions. Device, firmware 1.52 and Paimon were healthy.
+- Also found Gateway not listening on 127.0.0.1:8642. The current Hermes profile lacked its local API environment configuration; inherited process environment did not reach the multiplexed profile secret scope. Backed up the local Hermes .env privately and restored only API_SERVER_KEY (existing Bridge secret), API_SERVER_HOST=127.0.0.1 and API_SERVER_PORT=8642. Restarted the foreground Gateway hidden with the supported --replace option, without hook auto-approval or public listening. Private configuration/backup/logs are outside Git.
+- Authenticated capabilities check succeeded. A new API session test completed and returned the requested short reply. This test did not play audio or retry any failed user request. Existing desktop history is untouched.
+- Catalog marks desktop-origin sessions read-only in API mode. UI labels them, keeps history browsable, blocks text submission and exposes a one-click new writable Bridge conversation action. Backend checks writability before enqueueing text and before voice delivery. User must select/create a writable session to continue, preserving the old conversation instead of silently changing its history/context.
+- Validation: **150 Bridge tests and 19 Node interaction tests passed**, including desktop history access, writable/new-draft resolution and pre-send UI blocking. Bridge restarted, latest app 30 / CSS 23 assets served. Gateway API restored; no firmware change.
+
 ## Raised DSH Pet stage and LCD text removal (2026-10-20)
 
 - User requests a higher background stage so the character appears to stand on it, and removal of the bottom text line. Generator raises both stage ellipses by 20 logical pixels (top 208 -> 188), removes the LCD text draw, and keeps the source attribution in Bridge's theme panel, LICENSE and NOTICE.

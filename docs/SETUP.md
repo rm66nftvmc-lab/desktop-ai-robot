@@ -176,6 +176,10 @@ Invoke-RestMethod http://127.0.0.1:8787/api/tts/speak -Method Post `
 `409 permission_denied`。Bridge 已改为默认续接自己的 API 会话，没有就新建，并在目标为桌面会话时提前给出中文提示。网页 Hermes 分组里历史桌面会话仍可查看，
 但按键或发送前请选中一个新会话（`+ 新建`）。新建的 API 会话也会出现在 Hermes 桌面端列表里，可继续查看。
 
+Bridge 会把 API 模式下的桌面会话标为“只读”，保留历史查看，在输入区提供“新建可回复会话”按钮；服务端也会在文字入队前检查会话是否允许写入。
+
+如果 Hermes 升级后本地 `127.0.0.1:8642` 没有监听，还需恢复 Gateway 的 API 配置。当前 Hermes 使用按 profile 隔离的 secret scope，仅给启动进程设置环境变量可能无效；需在本机 Hermes 的 `.env` 中配置 `API_SERVER_KEY`（与 Bridge 私有 `hermes-api-key.txt` 一致）、`API_SERVER_HOST=127.0.0.1`、`API_SERVER_PORT=8642`，再启动 Gateway。实际密钥和 `.env` 不进入仓库。
+
 ---
 
 ## 6. 手机访问（Tailscale）与安全边界

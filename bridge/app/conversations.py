@@ -68,11 +68,15 @@ class Conversations:
             if not path.is_file():
                 return []
             with sqlite3.connect(f'file:{path.as_posix()}?mode=ro', uri=True, timeout=2) as db:
-                rows = db.execute("SELECT id,title,last_activity_at FROM sessions "
+                columns = {r[1] for r in db.execute('PRAGMA table_info(sessions)')}
+                origin = 'source' if 'source' in columns else 'NULL'
+                rows = db.execute(f"SELECT id,title,last_activity_at,{origin} FROM sessions "
                     "WHERE COALESCE(archived,0)=0 AND COALESCE(hidden,0)=0 "
                     "AND COALESCE(parent_session_id,'')='' ORDER BY last_activity_at DESC LIMIT 200").fetchall()
             return self._without_deleted(source,
-                [{'id': r[0], 'title': r[1] or '未命名会话', 'updated_at': r[2] or 0} for r in rows])
+                [{'id': r[0], 'title': r[1] or '未命名会话', 'updated_at': r[2] or 0,
+                  'read_only': bool(getattr(self.hermes, 'api_client', None))
+                               and r[3] not in {'api_server', 'bot_room'}} for r in rows])
         values = self.harness.client.rpc('session/list')['items']
         return self._without_deleted(source, [{'id': s['sessionId'],
                  'title': s.get('projections', {}).get('values', {}).get('title') or '未命名会话',
@@ -112,6 +116,12 @@ class Conversations:
             db.execute('INSERT INTO conversations(id,source,title,created_at) VALUES(?,?,?,?)',
                        (item['id'], source, item['title'], item['updated_at']))
         return item
+
+    def resolve_writable(self, source, conversation):
+        native = self.resolve(source, conversation)
+        if source == 'hermes' and getattr(self.hermes, 'api_client', None):
+            self.hermes._check_api_target(native)
+        return native
 
     def delete(self, source, conversation):
         """Delete one selected native session and its Bridge-side records."""

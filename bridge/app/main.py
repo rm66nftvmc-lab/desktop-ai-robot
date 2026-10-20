@@ -141,7 +141,7 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
     theme_voice_lock = threading.Lock()
     voice = VoiceConversation(database, data_dir, device, hermes, audio_output=audio_output,
                               workers={"hermes": hermes, "deepseek_harness": harness},
-                              validate_target=conversations.resolve)
+                              validate_target=conversations.resolve_writable)
     speech.on_transcript = voice.on_transcript
     speech.on_error = voice.on_speech_error
     runtime = RuntimeStatus()
@@ -515,7 +515,7 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
             if body.new_session:
                 raise HTTPException(status_code=400, detail="请选择已有会话或新建会话")
             try:
-                conversations.resolve(body.source, body.session_id)
+                conversations.resolve_writable(body.source, body.session_id)
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             except (OSError, RuntimeError) as exc:

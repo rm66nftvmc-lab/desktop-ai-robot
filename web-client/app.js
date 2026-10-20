@@ -41,6 +41,7 @@ let statusLoading = false;
 let answerTasks = [];
 let tasksContext = "";
 let tasksLoading = false;
+let sendPending = false;
 const drafts = BridgeUI.drafts((() => { try { return sessionStorage; } catch { return null; } })());
 let draftContext = null;
 
@@ -56,6 +57,18 @@ prompt.addEventListener("input", () => { if (draftContext !== null) drafts.save(
 window.addEventListener("pagehide", () => { if (draftContext !== null) drafts.save(draftContext, prompt.value); });
 
 function answerContext() { return `${source.value}:${selectedSessions[source.value] || ""}`; }
+
+function currentSessionReadOnly() {
+  const current = sessionCatalogs[source.value]?.items.find((item) => item.id === selectedSessions[source.value]);
+  return Boolean(current?.read_only);
+}
+function updateConversationAccess() {
+  const readonly = currentSessionReadOnly();
+  $("#readonly-session").hidden = !readonly;
+  prompt.readOnly = readonly;
+  $("#composer button[type=submit]").disabled = readonly || sendPending || sessionDeleteInProgress;
+  return readonly;
+}
 
 function currentAnswerTask() {
   if (tasksContext !== answerContext()) return null;
@@ -254,7 +267,7 @@ function renderSessions() {
         const button = document.createElement("button");
         button.type = "button";
         button.className = "session-item";
-        button.textContent = title;
+        button.textContent = item.read_only ? `${title} · 只读` : title;
         button.title = title;
         if (source.value === target && selectedSessions[target] === item.id) button.setAttribute("aria-current", "true");
         button.addEventListener("click", () => selectConversation(target, item.id));
@@ -455,6 +468,7 @@ async function refreshSessions() {
     }
     $("#session-error").textContent = sessionActionError || errors.join("；");
     renderSessions();
+    updateConversationAccess();
   })();
   try { await sessionsLoading; } finally { sessionsLoading = null; }
 }
@@ -690,6 +704,7 @@ document.addEventListener("pointercancel", () => { sidebarSwipeStart = null; }, 
 
 function setTarget() {
   syncDraftContext();
+  updateConversationAccess();
   const target = targets[source.value];
   $("#conversation-title").textContent = target.title;
   prompt.placeholder = target.placeholder;
@@ -899,7 +914,7 @@ $("#login-form").addEventListener("submit", async (event) => {
 $("#composer").addEventListener("submit", async (event) => {
   event.preventDefault();
   const submitted = prompt.value, text = submitted.trim();
-  if (!text || sessionDeleteInProgress) return;
+  if (!text || sessionDeleteInProgress || sendPending || currentSessionReadOnly()) return;
   const button = $("#composer button[type=submit]");
   if (button.disabled) return;
   const target = source.value, initialContext = answerContext();
@@ -908,6 +923,7 @@ $("#composer").addEventListener("submit", async (event) => {
   const errorBox = $("#send-error");
   errorBox.textContent = "";
   button.disabled = true;
+  sendPending = true;
   try {
     if (conversationTargets.includes(target) && !session) {
       await refreshSessions();
@@ -930,8 +946,10 @@ $("#composer").addEventListener("submit", async (event) => {
     }
     await refreshMessages();
   } catch (error) { if (answerContext() === context || error.contextChanged) errorBox.textContent = error.message; }
-  finally { button.disabled = false; if (answerContext() === context) prompt.focus(); }
+  finally { sendPending = false; button.disabled = currentSessionReadOnly(); if (answerContext() === context) prompt.focus(); }
 });
+
+$("#readonly-new").addEventListener("click", (event) => createConversation("hermes", event.currentTarget));
 
 $("#tts-form").addEventListener("submit", async (event) => {
   event.preventDefault();

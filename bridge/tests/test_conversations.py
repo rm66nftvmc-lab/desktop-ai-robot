@@ -38,6 +38,29 @@ def test_native_catalog_and_history_are_scoped_and_exclude_internal_messages(tmp
         catalog.create('doubao_web')
 
 
+def test_api_mode_marks_desktop_history_readonly_but_keeps_it_browsable(tmp_path):
+    database, catalog = setup_catalog(tmp_path)
+    with sqlite3.connect(tmp_path / 'state.db') as db:
+        db.execute("ALTER TABLE sessions ADD COLUMN source TEXT DEFAULT 'api_server'")
+        db.execute("UPDATE sessions SET source='desktop' WHERE id='one'")
+    catalog.hermes.api_client = object()
+
+    def check_target(session):
+        if session == 'one':
+            raise RuntimeError('desktop session is read-only')
+
+    catalog.hermes._check_api_target = check_target
+    items = {item['id']: item for item in catalog.catalog('hermes')['items']}
+    assert items['one']['read_only'] is True
+    assert items['two']['read_only'] is False
+    assert catalog.history('hermes', 'one')[0]['text'] == '第一条'
+    with pytest.raises(RuntimeError, match='read-only'):
+        catalog.resolve_writable('hermes', 'one')
+    assert catalog.resolve_writable('hermes', 'two') == 'two'
+    draft = catalog.create('hermes')
+    assert catalog.resolve_writable('hermes', draft['id']) is None
+
+
 def test_new_draft_is_empty_then_binds_without_switching_conversation(tmp_path):
     database, catalog = setup_catalog(tmp_path)
     draft = catalog.create('hermes')
