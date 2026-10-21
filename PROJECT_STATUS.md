@@ -2,6 +2,12 @@
 
 Last updated: 2026-10-21
 
+## Spoken wake acknowledgement (2026-10-21)
+
+- Wake-word recognition now says the fixed local phrase “我在呢” using the current bound voice, then starts automatic capture only after device playback is finished and a 0.3-second quiet tail. First synthesis may take longer; subsequent wakes reuse one in-memory voice-specific clip cache. No AI request is created for the acknowledgement.
+- Acknowledgement microphone packets are discarded. Disable/disconnect/manual recording invalidate the pending wake; synthesis/playback failures return to armed with an actionable error instead of opening capture. Global mute skips the cue while retaining capture. Button recording, typed-reply policy, firmware and wiring are unchanged.
+- Validation: 180 backend tests passed, including ordering, own-audio discard, disconnect/manual/disable cancellation, failed acknowledgement, mute and voice-cache switching. Physical wake/acknowledgement/recording timing remains pending user confirmation.
+
 ## Reply playback follows original input (2026-10-21)
 
 - User requests automatic robot playback for both button and wake-word microphone questions; mobile typed questions receive text replies only. Both microphone paths already share the voice input route, and web submissions retain the text route on both mobile and desktop.

@@ -733,7 +733,7 @@ async function refreshStatus() {
     if (!wakePending && status.wake) {
       $("#wake-enabled").checked = status.wake.enabled;
       $("#wake-channel").value = status.wake.mic_channel;
-      const wakeLabels = {disabled:"未启用", loading:"准备中", armed:"待命", paused:"暂时暂停", waking:"正在唤醒", recording:"录音中", manual:"按键录音", finishing:"识别中", error:"不可用"};
+      const wakeLabels = {disabled:"未启用", loading:"准备中", armed:"待命", paused:"暂时暂停", acknowledging:"回应唤醒中", waking:"正在唤醒", recording:"录音中", manual:"按键录音", finishing:"识别中", error:"不可用"};
       $("#wake-state").textContent = status.device.connected ? (wakeLabels[status.wake.state] || "准备中") : "设备未连接";
       $("#wake-error").textContent = status.wake.last_error || wakeConfigError;
     }

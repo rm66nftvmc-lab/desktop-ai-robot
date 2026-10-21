@@ -44,8 +44,10 @@ class WakeRecognizer:
 
 
 class WakeWorker:
-    def __init__(self, database, data_dir, device, voice_busy=lambda: False, recognizer_factory=WakeRecognizer):
+    def __init__(self, database, data_dir, device, voice_busy=lambda: False, recognizer_factory=WakeRecognizer,
+                 acknowledge=None):
         self.database, self.device, self.voice_busy = database, device, voice_busy
+        self.acknowledge = acknowledge
         self.model_path = data_dir / 'models/vosk-model-small-cn-0.22'
         self.factory = recognizer_factory
         self._lock = threading.RLock()
@@ -121,6 +123,8 @@ class WakeWorker:
         with self._lock:
             if not self._enabled:
                 return
+            if self._state == 'acknowledging':
+                return  # Do not accumulate the robot's own acknowledgement.
             self._samples += len(pcm)//2
             item = (self._epoch, bytes(pcm), capture, generation, time.monotonic())
         try:
@@ -216,10 +220,42 @@ class WakeWorker:
             self._pcm.clear()
             if self._engine.accept(audio):
                 self._epoch += 1
-                self._state = 'waking'
+                self._error = None
+                self._state = 'acknowledging' if self.acknowledge else 'waking'
                 self._started = time.monotonic()
-                if not self.device.request_capture(1):
+                if not self.acknowledge and not self.device.request_capture(1):
                     self._state, self._error = 'error', '设备正忙，暂时无法唤醒'
+
+    def _acknowledge_wake(self):
+        with self._lock:
+            if self._state != 'acknowledging':
+                return
+            epoch = self._epoch
+
+        def cancelled():
+            with self._lock:
+                return (self._stop.is_set() or not self._enabled or self._epoch != epoch
+                        or self._state != 'acknowledging')
+
+        try:
+            ready = self.acknowledge(cancelled)
+        except Exception as exc:
+            ready = False
+            with self._lock:
+                if not cancelled():
+                    self._error = f'唤醒提示音未完成（{type(exc).__name__}），请重新呼叫'
+        with self._lock:
+            if cancelled():
+                return
+            self._epoch += 1
+            if not ready:
+                self._state = 'armed'
+                self._cooldown = time.monotonic() + .8
+                return
+            self._state = 'waking'
+            self._started = time.monotonic()
+            if not self.device.request_capture(1):
+                self._state, self._error = 'error', '设备正忙，暂时无法唤醒'
 
     def _run(self):
         while not self._stop.is_set():
@@ -241,6 +277,7 @@ class WakeWorker:
                         self._tick()
                 item = self._queue.get(timeout=.1)
                 self._consume(item)
+                self._acknowledge_wake()
             except queue.Empty:
                 pass
             except Exception as exc:

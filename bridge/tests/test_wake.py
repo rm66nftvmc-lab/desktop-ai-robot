@@ -1,6 +1,7 @@
 import io
 import struct
 import time
+import pytest
 
 from bridge.app.device import DeviceLink
 from bridge.app.protocol import Frame, FrameParser, BUTTON, WAKE_AUDIO, WAKE_CONFIG, AUDIO_UP, CAPTURE_CONTROL
@@ -65,6 +66,54 @@ def test_speaker_audio_and_pending_reply_cannot_wake(tmp_path):
     wake.voice_busy = lambda: False
     consume(wake)
     assert device.requests == [(1, None)]
+
+
+def test_wake_waits_for_acknowledgement_and_discards_its_mic_audio(tmp_path):
+    wake, device = worker(tmp_path)
+    def acknowledge(cancelled):
+        assert not device.requests and not cancelled()
+        wake.feed(bytes(3200), False, 0)
+        assert wake._queue.empty()
+        return True
+    wake.acknowledge = acknowledge
+    consume(wake)
+    assert wake.snapshot()['state'] == 'acknowledging'
+    assert not device.requests
+    wake._acknowledge_wake()
+    assert device.requests == [(1, None)]
+    assert wake.snapshot()['state'] == 'waking'
+    wake.capture_changed(True, 1)
+    assert wake.snapshot()['state'] == 'recording'
+
+
+@pytest.mark.parametrize('change', ['disconnect', 'manual', 'disable'])
+def test_acknowledgement_cancellation_never_starts_late_capture(tmp_path, change):
+    wake, device = worker(tmp_path)
+    def acknowledge(cancelled):
+        if change == 'disconnect':
+            wake.disconnected()
+        elif change == 'manual':
+            wake.capture_changed(True, 4)
+        else:
+            wake.update(False, 'auto')
+        assert cancelled()
+        return True
+    wake.acknowledge = acknowledge
+    consume(wake)
+    wake._acknowledge_wake()
+    assert not device.requests
+
+
+def test_failed_acknowledgement_returns_to_armed_without_open_mic(tmp_path):
+    wake, device = worker(tmp_path)
+    def fail(cancelled):
+        raise RuntimeError('TTS unavailable')
+    wake.acknowledge = fail
+    consume(wake)
+    wake._acknowledge_wake()
+    assert not device.requests
+    assert wake.snapshot()['state'] == 'armed'
+    assert 'RuntimeError' in wake.snapshot()['last_error']
 
 
 def test_wake_speech_then_silence_ends_once_for_the_same_generation(tmp_path):
