@@ -2,6 +2,14 @@
 
 Last updated: 2026-10-21
 
+## Dual INMP441 enhancement first version (2026-10-21)
+
+- User mounted two INMP441s front-to-back, 5 cm apart, both pickup holes up. Rear/original microphone L/R is GND; front/new microphone L/R is 3V3. Firmware 1.62 advertises stereo_protocol=1, negotiates mode 3, uploads synchronized PCM16 slots in frame types 24/25. Fixed mono channels and old firmware remain compatible.
+- Bridge applies bounded delay-and-sum, conservative coherence filtering and low-frequency attenuation on PC, with single-channel fallback. Captures still route to the selected AI/session. Streamed local Silero VAD v6 replaces the automatic recording's loudness-only endpoint test. No new downloaded model, paid API or background audio storage. This is not voice identification, AEC or proven front-only rejection; coherent TV/other speech remains a limitation. Raw slot-to-physical mapping can be checked with close-talk tests.
+- Tests: 186 backend and 19 Node passed; firmware builds successfully. Synthetic DSP checks preserve aligned signal and reduce independent noise by >3dB, process at ~0.096 ms per 8 ms block. Local generated speech and silence validate the installed VAD. These are not room-noise acceptance results.
+- Firmware 1.62 application 15,923,760 B; verified old 1.61 backup, changed 974,848 B, verified full new flash digest. Live USB connected, stereo mode 3, both slots active, ~16k samples/s, CRC 0. Observed a real wake→acknowledgement→recording→AI→speech-send sequence; user has been asked about heard reply, automatic stop, missing words and loudness. Physical noise comparison remains pending.
+- Display, bound voices, speaker controls, typed-input silence and Wi-Fi safe mode preserved. See docs/VOICE_WAKE.md for algorithms and scope.
+
 ## Spoken wake acknowledgement (2026-10-21)
 
 - Wake-word recognition now says the fixed local phrase “我在呢” using the current bound voice, then starts automatic capture only after device playback is finished and a 0.3-second quiet tail. First synthesis may take longer; subsequent wakes reuse one in-memory voice-specific clip cache. No AI request is created for the acknowledgement.

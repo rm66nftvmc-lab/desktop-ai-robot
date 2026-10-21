@@ -28,6 +28,7 @@ from .security import (SESSION_SECONDS, Sessions, anchor_path, load_or_create_to
 from .speech import SpeechWorker
 from .wake import WakeWorker
 from .wake_ack import WakeAcknowledgement
+from .microphone import SpeechActivity
 from .storage import add_message, initialize, list_messages, set_delivery, get_setting, set_setting
 from .tts import (SynthesisCancelled, selected_voice, set_selected_voice, remember_voice, synthesize_chunks,
                   start_voice_service, stop_voice_services, voice_status,
@@ -161,7 +162,8 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
                       speech.snapshot()['state'] in ('queued', 'transcribing') or voice.snapshot()['state'] in (
                           'listening', 'listening_for_approval', 'sending', 'waiting_for_hermes', 'waiting_for_agent',
                           'queued_to_speak', 'speaking', 'approval_prompt', 'approval_pending'),
-                      acknowledge=WakeAcknowledgement(data_dir, device, audio_output))
+                      acknowledge=WakeAcknowledgement(data_dir, device, audio_output),
+                      speech_activity=SpeechActivity())
     runtime = RuntimeStatus()
     playback = PlaybackControl(device)
     hermes.on_reply = voice.on_reply

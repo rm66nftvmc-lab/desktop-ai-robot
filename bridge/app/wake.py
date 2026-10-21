@@ -45,9 +45,10 @@ class WakeRecognizer:
 
 class WakeWorker:
     def __init__(self, database, data_dir, device, voice_busy=lambda: False, recognizer_factory=WakeRecognizer,
-                 acknowledge=None):
+                 acknowledge=None, speech_activity=None):
         self.database, self.device, self.voice_busy = database, device, voice_busy
         self.acknowledge = acknowledge
+        self.speech_activity = speech_activity
         self.model_path = data_dir / 'models/vosk-model-small-cn-0.22'
         self.factory = recognizer_factory
         self._lock = threading.RLock()
@@ -85,6 +86,7 @@ class WakeWorker:
             return {'enabled': self._enabled, 'phrase': '你好，大肥鱼', 'state': self._state,
                     'mic_channel': self._channel, 'wake_count': self._count, 'last_error': self._error,
                     'pcm_samples': self._samples, 'mic_rms': self._level,
+                    'speech_probability': self.speech_activity.probability if self.speech_activity else None,
                     'model_ready': (self.model_path / 'am/final.mdl').is_file()}
 
     def update(self, enabled, mic_channel):
@@ -136,6 +138,8 @@ class WakeWorker:
 
     def capture_changed(self, listening, generation):
         with self._lock:
+            if self.speech_activity:
+                self.speech_activity.reset()
             automatic = listening and self._state == 'waking'
             self._epoch += 1
             self._automatic = automatic
@@ -193,7 +197,9 @@ class WakeWorker:
             if capture:
                 if self._automatic and generation == self._generation:
                     duration = len(pcm)/32000
-                    if rms >= max(120, self._noise*3):
+                    voiced = (self.speech_activity.accept(pcm) if self.speech_activity
+                              else rms >= max(120, self._noise*3))
+                    if voiced:
                         self._speech += duration
                         self._silence = 0
                     else:

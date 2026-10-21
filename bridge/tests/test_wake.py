@@ -116,6 +116,26 @@ def test_failed_acknowledgement_returns_to_armed_without_open_mic(tmp_path):
     assert 'RuntimeError' in wake.snapshot()['last_error']
 
 
+def test_loud_non_speech_no_longer_keeps_automatic_recording_alive(tmp_path):
+    wake, device = worker(tmp_path)
+    class Detector:
+        probability = 0.
+        def reset(self):
+            pass
+        def accept(self, pcm):
+            return self.probability >= .5
+    wake.speech_activity = Detector()
+    wake._state = 'waking'
+    wake.capture_changed(True, 9)
+    wake.speech_activity.probability = .9
+    for _ in range(3):
+        consume(wake, capture=True, generation=9, value=500)
+    wake.speech_activity.probability = .01
+    for _ in range(16):
+        consume(wake, capture=True, generation=9, value=5000)
+    assert device.requests == [(0, 9)]
+
+
 def test_wake_speech_then_silence_ends_once_for_the_same_generation(tmp_path):
     wake, device = worker(tmp_path)
     wake._state = 'waking'

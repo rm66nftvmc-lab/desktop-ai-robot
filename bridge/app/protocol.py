@@ -29,6 +29,8 @@ NETWORK_STATUS = 0x14  # Separate diagnostic packet keeps the original STATUS be
 WAKE_CONFIG = 0x15
 WAKE_AUDIO = 0x16
 CAPTURE_CONTROL = 0x17  # 1 start, 0 finish, 2 cancel; BUTTON confirms the result.
+STEREO_UP = 0x18  # Interleaved PCM16 slots, 16 kHz; only after capability negotiation.
+STEREO_WAKE = 0x19
 
 
 @dataclass(frozen=True)

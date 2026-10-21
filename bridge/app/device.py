@@ -13,6 +13,7 @@ from serial.tools import list_ports
 
 from . import faces, protocol
 from .audio_output import AudioOutput
+from .microphone import DualMicrophone
 
 
 def open_device_port(name: str):
@@ -59,6 +60,7 @@ class DeviceLink:
         self._wake_pending = True
         self._capture_command = None
         self._capture_generation = 0
+        self.microphone = DualMicrophone()
         self._playback: bytes | None = None
         self._playback_offset = 0
         self._playback_generation = 0
@@ -135,6 +137,8 @@ class DeviceLink:
             if not self._state['connected'] or self._state['wake_protocol'] != 1:
                 return sequence
             config = self._wake_desired if self._wake_pending else None
+            if config is not None and config[1] == 0 and self._state.get('stereo_protocol') == 1:
+                config = (config[0], 3)
             self._wake_pending = False
             command, self._capture_command = self._capture_command, None
             if command and command[1] != self._capture_generation:
@@ -308,7 +312,7 @@ class DeviceLink:
             self._playback_offset = 0
             self._playback_open = False
             self._state.update(connected=False, listening=False, playing=False, device_playing=False)
-            self._state.update(wake_protocol=None, wake_device_enabled=False)
+            self._state.update(wake_protocol=None, stereo_protocol=None, wake_device_enabled=False)
             self._capture_command = None
         if active and self._on_disconnect:
             self._on_disconnect()
@@ -322,6 +326,19 @@ class DeviceLink:
         self.set_face(faces.ERROR)
 
     def _handle(self, frame: protocol.Frame, port: serial.Serial, sequence: int) -> int:
+        if frame.kind in (protocol.STEREO_UP, protocol.STEREO_WAKE):
+            state = self.snapshot()
+            if not state['connected'] or state.get('stereo_protocol') != 1 or not frame.payload or len(frame.payload) % 4:
+                return sequence
+            capture = frame.kind == protocol.STEREO_UP
+            if capture != bool(state['listening']):
+                return sequence
+            pcm = self.microphone.process(frame.payload, capture=capture)
+            self._update(microphone=dict(self.microphone.stats))
+            if not pcm:
+                return sequence
+            frame = protocol.Frame(protocol.AUDIO_UP if capture else protocol.WAKE_AUDIO,
+                                   frame.sequence, pcm)
         if frame.kind == protocol.HELLO:
             try:
                 hello = json.loads(frame.payload)
@@ -333,7 +350,8 @@ class DeviceLink:
             if self.snapshot()["connected"]:
                 self._connection_lost()
             self._update(connected=True, firmware=hello.get("firmware"), last_error=None,
-                         wake_protocol=hello.get('wake_protocol'))
+                         wake_protocol=hello.get('wake_protocol'), stereo_protocol=hello.get('stereo_protocol'))
+            self.microphone.reset()
             self.set_face(faces.READY)
             with self._lock:
                 self._pending_theme = self._desired_theme
@@ -342,6 +360,7 @@ class DeviceLink:
             return (sequence + 1) & 0xFFFF
         if frame.kind == protocol.WAKE_CONFIG and len(frame.payload) == 2 and self.snapshot()['connected']:
             self._update(wake_device_enabled=bool(frame.payload[0]), mic_channel=frame.payload[1])
+            self.microphone.reset()
         elif frame.kind == protocol.WAKE_AUDIO and len(frame.payload) % 2 == 0:
             state = self.snapshot()
             if self._on_mic_audio and state['connected'] and state['wake_device_enabled']:
