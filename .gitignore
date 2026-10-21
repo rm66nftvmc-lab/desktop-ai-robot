@@ -24,3 +24,4 @@ robot-diagnostics-*.json
 *.pt
 *.ckpt
 device-network.json
+voice-device/diagnostics/wifi-sdk/sdkconfig.low-power*

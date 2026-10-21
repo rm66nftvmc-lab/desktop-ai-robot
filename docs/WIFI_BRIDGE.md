@@ -101,3 +101,8 @@ CLI 会在断开后尝试重新握手，并读取 STATUS / NETWORK_STATUS；成�
 新增构建环境 wifi-probe / wifi-probe-no-psram 和 scripts/read_minimal_wifi_probe.py（可加 --calibration-only）。default_envs 明确保持 esp32-s3-devkitc-1，普通构建/上传不选择诊断应用；正常环境只编译 main.cpp，诊断源单独选择。两种最小环境及默认生产环境均编译通过。
 
 临时覆盖前先对真实 1.60 镜像做完整 digest 校验并保留私有备份，只覆盖应用起始 647,168 字节。射频两组对照作为一批、校准只读检查作为另一批；每批结束恢复原前缀，再对整份 15,922,960 字节应用做 digest 验证，两批恢复均成功，未改分区表或擦除 NVS。最终 Bridge 确认固件 1.60、USB COM9、扬声器就绪、原 DSH 动画持续增加、音频 CRC 与动画解码错误均为 0。完整非敏感阶段数据见 [结构化结果](wifi-minimal-results.json)。
+## SDK 低功率对照准备（2026-10-21，尚未运行）
+
+独立工程位于 `voice-device/diagnostics/wifi-sdk`，说明及恢复要求见其 README。使用 IDF 4.4.7 源码构建，目标 PHY 10 dBm、CPU 80 MHz、关闭 PSRAM，启用官方欠压后降功率配置并保留原欠压保护等级。需要成功构建和 `scripts/verify_wifi_sdk_build.py` 验证后才能安排临时烧录。
+
+目前依赖下载网络连接失败，本机没有所需 SDK 缓存，故本轮没有烧录或新增无线测试结果。1.60 正常固件和全部接线保持原状。不要将准备好的配置文件误记为 SDK 配置已生效，或将低功率选项误记为 Wi-Fi 已修复。

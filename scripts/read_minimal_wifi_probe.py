@@ -36,7 +36,7 @@ def read_probe(*, calibration_only=False):
                         continue
                     if not isinstance(value, dict):
                         continue
-                    if 'idf_version' in value:
+                    if 'idf_version' in value and 'stage' not in value:
                         records.append(value)
                         print(json.dumps(value), flush=True)
                         continue
