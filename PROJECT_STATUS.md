@@ -2,6 +2,14 @@
 
 Last updated: 2026-10-21
 
+## Faster wake and reply preparation (2026-10-21)
+
+- User reports slow initial acknowledgement and unclear “我在呢”, requests “在呢” and faster responses. Cue changed to “在呢。” with punctuation for synthesis; trim excessive silence, retain phoneme edges, prewarm on startup/theme switch and persist only this fixed cue per voice in private cache. Cache is not user microphone audio. Active Paimon cue measured 1.329 seconds; initial local generation ~0.602 seconds and a fresh-process cache load ~8 ms.
+- Complete plain Vosk partial hypothesis may trigger after ~300 ms stability; final-result confidence checks remain. Word-aligned partials withheld the last word and did not improve the initial experiment, so ordinary partial text is used. Synthetic positive fired at 1.9 seconds of input vs 2.6 seconds for final-only; three non-wake sentences rejected. This does not establish real-world false-wake rates.
+- Automatic endpoint silence shortened 1.4→1.0 seconds with VAD; button recording remains manual. Whisper preloads the local model before the first recording. Long Ball voice replies synthesize a smaller complete first clause, preserving short English/mixed utterances and existing voice/volume.
+- Added host stream-completion generation after all audio ACKs and AUDIO_END; the wake cue's 300 ms echo guard can use it instead of waiting up to 3 seconds for stale device_playing telemetry. No firmware, animation, microphone wiring or AI model settings changed. AI provider generation time remains outside these local optimizations.
+- Validation: 191 backend tests passed before deployment, including persisted silent warmup, stale-STATUS handling, partial phrase stability, short-pause preservation and long-clause segmentation. Physical clarity and reaction-time acceptance remains pending user retest.
+
 ## Dual INMP441 enhancement first version (2026-10-21)
 
 - User mounted two INMP441s front-to-back, 5 cm apart, both pickup holes up. Rear/original microphone L/R is GND; front/new microphone L/R is 3V3. Firmware 1.62 advertises stereo_protocol=1, negotiates mode 3, uploads synchronized PCM16 slots in frame types 24/25. Fixed mono channels and old firmware remain compatible.

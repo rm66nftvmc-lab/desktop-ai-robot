@@ -15,6 +15,14 @@ def test_local_voice_preserves_english_and_mixed_short_sentences():
     parts = list(tts._cosyvoice_parts(long))
     assert all(0 < len(part) <= 160 for part in parts)
     assert " ".join(parts) == long.strip()
+    assert len(parts[0]) <= 60
+
+
+def test_long_chinese_reply_starts_with_first_complete_clause():
+    text = '你好，我会先回答你的问题。' + '接下来我们可以继续检查麦克风的收音效果。'*10
+    parts = list(tts._cosyvoice_parts(text))
+    assert parts[0] == '你好，我会先回答你的问题。'
+    assert ''.join(parts) == text
 
 
 def test_local_loudness_is_not_dominated_by_isolated_peaks():

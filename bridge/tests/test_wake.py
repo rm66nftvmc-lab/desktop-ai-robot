@@ -6,7 +6,8 @@ import pytest
 from bridge.app.device import DeviceLink
 from bridge.app.protocol import Frame, FrameParser, BUTTON, WAKE_AUDIO, WAKE_CONFIG, AUDIO_UP, CAPTURE_CONTROL
 from bridge.app.storage import initialize
-from bridge.app.wake import WakeWorker
+from bridge.app.wake import WakeWorker, WakeRecognizer, PHRASE
+import json
 
 
 class FakeDevice:
@@ -45,6 +46,46 @@ def worker(tmp_path):
     wake = WakeWorker(db, tmp_path, device)
     wake._enabled, wake._state, wake._engine = True, 'armed', Recognizer()
     return wake, device
+
+
+def test_complete_confident_partial_wake_is_stable_before_triggering():
+    class Decoder:
+        text, confidence, final = PHRASE, .95, False
+        def AcceptWaveform(self, pcm):
+            return self.final
+        def PartialResult(self):
+            return json.dumps({'partial': self.text, 'partial_result': [{'conf': self.confidence}]})
+        def Result(self):
+            return json.dumps({'text': self.text, 'result': [{'conf': self.confidence}]})
+        def Reset(self):
+            pass
+    recognizer = WakeRecognizer.__new__(WakeRecognizer)
+    recognizer.rec = Decoder()
+    recognizer._partial_audio = 0.
+    assert not recognizer.accept(bytes(3200))
+    assert not recognizer.accept(bytes(3200))
+    assert recognizer.accept(bytes(3200))
+    recognizer.reset()
+    recognizer.rec.text = '你好大肥'
+    assert not recognizer.accept(bytes(6400))
+    recognizer.rec.text, recognizer.rec.confidence = PHRASE, .5
+    assert not recognizer.accept(bytes(6400))
+    recognizer.rec.confidence, recognizer.rec.final = .95, True
+    assert recognizer.accept(bytes(3200))
+
+
+def test_short_pause_does_not_finish_but_one_second_silence_does(tmp_path):
+    wake, device = worker(tmp_path)
+    wake._state = 'waking'
+    wake.capture_changed(True, 8)
+    for _ in range(3):
+        consume(wake, capture=True, generation=8)
+    for _ in range(8):
+        consume(wake, capture=True, generation=8, value=0)
+    assert not device.requests
+    for _ in range(3):
+        consume(wake, capture=True, generation=8, value=0)
+    assert device.requests == [(0, 8)]
 
 
 def consume(wake, *, capture=False, generation=0, value=500, epoch=None):

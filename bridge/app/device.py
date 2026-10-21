@@ -247,6 +247,7 @@ class DeviceLink:
             self._playback_offset = 0
             self._playback_open = False
             self._state["playing"] = False
+            self._state['playback_finished_generation'] = None
             self._state["last_error"] = None
             return self._playback_generation
 
@@ -562,7 +563,7 @@ class DeviceLink:
                             if not more_audio:
                                 port.write(protocol.encode(protocol.AUDIO_END, sequence))
                                 sequence = (sequence + 1) & 0xFFFF
-                                self._update(playing=False)
+                                self._update(playing=False, playback_finished_generation=active_generation)
                                 self.set_face(faces.READY)
                                 playback_active = False
             except (serial.SerialException, OSError, ValueError) as exc:

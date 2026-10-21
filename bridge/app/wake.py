@@ -11,6 +11,7 @@ import time
 from .storage import get_setting, set_setting
 
 PHRASE = '你好大肥鱼'
+END_SILENCE = 1.0
 CHANNELS = {'auto': 0, 'left': 1, 'right': 2}
 
 
@@ -29,18 +30,28 @@ class WakeRecognizer:
             remaining = remaining[len(word):]
         self.rec = KaldiRecognizer(self.model, 16000, json.dumps([' '.join(words), '[unk]'], ensure_ascii=False))
         self.rec.SetWords(True)
+        # Word-aligned partials withhold the last word until alignment is final.
+        # Plain partial hypotheses are earlier; require the complete phrase to
+        # remain unchanged for 300 ms before accepting one.
+        self.rec.SetPartialWords(False)
+        self._partial_audio = 0.
 
     def reset(self):
         self.rec.Reset()
+        self._partial_audio = 0.
 
     def accept(self, pcm):
-        if not self.rec.AcceptWaveform(pcm):
-            return False
-        result = json.loads(self.rec.Result())
-        text = re.sub(r'[^\u4e00-\u9fff]', '', result.get('text', ''))
-        words = result.get('result', [])
-        return (text == PHRASE and bool(words)
-                and sum(w.get('conf', 0) for w in words)/len(words) >= .75)
+        final = self.rec.AcceptWaveform(pcm)
+        result = json.loads(self.rec.Result() if final else self.rec.PartialResult())
+        text = re.sub(r'[^\u4e00-\u9fff]', '', result.get('text' if final else 'partial', ''))
+        words = result.get('result' if final else 'partial_result', [])
+        confident = bool(words) and sum(w.get('conf', 0) for w in words)/len(words) >= .75
+        matched = text == PHRASE and (confident if final or words else True)
+        if final:
+            self._partial_audio = 0.
+            return matched
+        self._partial_audio = self._partial_audio + len(pcm)/32000 if matched else 0.
+        return self._partial_audio >= .3
 
 
 class WakeWorker:
@@ -87,6 +98,7 @@ class WakeWorker:
                     'mic_channel': self._channel, 'wake_count': self._count, 'last_error': self._error,
                     'pcm_samples': self._samples, 'mic_rms': self._level,
                     'speech_probability': self.speech_activity.probability if self.speech_activity else None,
+                    'acknowledgement': self.acknowledge.snapshot() if hasattr(self.acknowledge, 'snapshot') else None,
                     'model_ready': (self.model_path / 'am/final.mdl').is_file()}
 
     def update(self, enabled, mic_channel):
@@ -204,7 +216,7 @@ class WakeWorker:
                         self._silence = 0
                     else:
                         self._silence += duration
-                    if self._speech >= .2 and self._silence >= 1.4:
+                    if self._speech >= .2 and self._silence >= END_SILENCE:
                         self._finish()
                 return
             state = self.device.snapshot()

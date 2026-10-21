@@ -158,11 +158,12 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
                               validate_target=conversations.resolve_writable)
     speech.on_transcript = voice.on_transcript
     speech.on_error = voice.on_speech_error
+    wake_ack = WakeAcknowledgement(data_dir, device, audio_output)
     wake = WakeWorker(database, data_dir, device, voice_busy=lambda:
                       speech.snapshot()['state'] in ('queued', 'transcribing') or voice.snapshot()['state'] in (
                           'listening', 'listening_for_approval', 'sending', 'waiting_for_hermes', 'waiting_for_agent',
                           'queued_to_speak', 'speaking', 'approval_prompt', 'approval_pending'),
-                      acknowledge=WakeAcknowledgement(data_dir, device, audio_output),
+                      acknowledge=wake_ack,
                       speech_activity=SpeechActivity())
     runtime = RuntimeStatus()
     playback = PlaybackControl(device)
@@ -179,6 +180,7 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
         except (OSError, RuntimeError):
             logger.exception("Could not start optional local TTS; keeping the current voice")
         warm_voice(data_dir)
+        wake_ack.warm()
         try:
             harness.client.start()
         except (OSError, ValueError):
@@ -194,6 +196,7 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
             yield
         finally:
             wake.stop()
+            wake_ack.stop()
             network.stop()
             device.stop()
             speech.stop()
@@ -348,6 +351,7 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
             set_setting(database, 'display_theme', body.theme)
             device.set_quiet_playback(body.theme == 'qiuqiu')
             device.set_theme(2 if body.theme == 'dsh_pet' else 1)
+        wake_ack.warm()
         return {'theme': body.theme, 'voice': THEME_VOICES[body.theme], 'queued': True}
 
     @app.post("/api/device/animation", dependencies=[Depends(require_session)])
@@ -421,6 +425,7 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
                     raise ValueError("声线随显示动画切换，请在显示动画面板选择角色")
                 set_selected_voice(data_dir, body.voice)
                 device.set_quiet_playback(body.voice.startswith('cosyvoice'))
+                wake_ack.warm()
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except RuntimeError as exc:

@@ -57,8 +57,18 @@ class SpeechWorker:
         with self._lock:
             return list(self._transcripts)
 
+    def _load_model(self):
+        from faster_whisper import WhisperModel
+        return WhisperModel('small', device='cpu', compute_type='int8',
+                            download_root=str(self.model_cache), local_files_only=True)
+
     def _run(self) -> None:
-        model = None
+        try:
+            model = self._load_model()  # Preload locally before the first user recording.
+        except Exception:
+            model = None  # A real recording still gets the normal actionable error.
+        with self._lock:
+            self._status['model_ready'] = model is not None
         while True:
             job = self._jobs.get()
             if job is None:
@@ -68,12 +78,9 @@ class SpeechWorker:
                 self._status.update(state="transcribing", last_error=None, capture_generation=capture_generation)
             try:
                 if model is None:
-                    from faster_whisper import WhisperModel
-                    # Never download a model while processing speech.
-                    model = WhisperModel(
-                        "small", device="cpu", compute_type="int8",
-                        download_root=str(self.model_cache), local_files_only=True,
-                    )
+                    model = self._load_model()
+                    with self._lock:
+                        self._status['model_ready'] = True
                 segments, _ = model.transcribe(
                     io.BytesIO(wav), language="zh", beam_size=5,
                     vad_filter=True, condition_on_previous_text=False,

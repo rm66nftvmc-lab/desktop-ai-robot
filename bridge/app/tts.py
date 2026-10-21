@@ -470,20 +470,30 @@ def synthesize_chunks(text: str, data_dir: Path,
 
 
 def _cosyvoice_parts(text: str, limit: int = 160):
-    """Preserve short utterances; the old 18-character lead-in cuts English clauses."""
+    """Start long replies with a smaller clause; preserve short mixed utterances."""
     remaining = text.strip()
+    first = True
     while remaining:
-        if len(remaining) <= limit:
+        current_limit = min(60, limit) if first else limit
+        if len(remaining) <= current_limit:
             yield remaining
             return
-        boundary = max((remaining.rfind(mark, 0, limit + 1) + 1
+        boundary = max((remaining.rfind(mark, 0, current_limit + 1) + 1
                         for mark in "。！？!?；;\n"), default=0)
-        if boundary < limit // 2:
-            boundary = remaining.rfind(" ", 0, limit + 1)
-        if boundary < limit // 2:
-            boundary = limit
+        if first:
+            endings = [m.end() for m in re.finditer(r'[。！？!?；;\n]', remaining[:current_limit])
+                       if m.end() >= 8]
+            if endings:
+                boundary = endings[0]
+            elif boundary < 8:
+                boundary = remaining.rfind('，', 8, current_limit) + 1
+        if boundary < 8:
+            boundary = remaining.rfind(" ", 0, current_limit + 1)
+        if boundary < 8:
+            boundary = current_limit
         yield remaining[:boundary].strip()
         remaining = remaining[boundary:].strip()
+        first = False
 
 
 def _cosyvoice_device_wav(samples: np.ndarray, sample_rate: int) -> bytes:
