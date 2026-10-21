@@ -2,6 +2,13 @@
 
 Last updated: 2026-10-21
 
+## Wake cue rhythm replacement (2026-10-21)
+
+- User reports “在呢” sounds unnatural with an internal pause. Inspection found the v2 cached Paimon clip lasts ~1.329 seconds with a pronounced inter-syllable energy dip. The cue was already one continuous WAV; the transport was not proven to be the cause of that perceived pause.
+- Generated punctuation variants locally and selected an intact “在呢！” take lasting ~0.614 seconds with no internal low-energy gap at the check threshold. Installed it in the private v3 voice cache. Audio is not sped up or spliced between characters. New uncached generation retries up to three times when a cue is long or internally paused, preferring a shorter lower-gap take; this heuristic is not a guarantee of naturalness.
+- Old cache remains private but is no longer selected. Background prewarm, voice binding, mute and input routing remain unchanged. During the first audition the host sent all 20 cue packets but stale device_playing telemetry rejected the following capture; fixed capture admission to accept the current acknowledged stream-completion generation. A busy capture now returns to armed after a short cooldown instead of remaining stuck in error.
+- Validation: 194 backend tests passed, including internally paused cue retry, silent warmup/cache reuse, stale speaker status capture admission and transient-busy rearming. Bridge restarted with the replacement and capture fix; physical listening acceptance pending. User then requested a conditional spoken “bridge” when disconnected; clarification is pending because fully offline wake recognition is not implemented on the MCU.
+
 ## Faster wake and reply preparation (2026-10-21)
 
 - User reports slow initial acknowledgement and unclear “我在呢”, requests “在呢” and faster responses. Cue changed to “在呢。” with punctuation for synthesis; trim excessive silence, retain phoneme edges, prewarm on startup/theme switch and persist only this fixed cue per voice in private cache. Cache is not user microphone audio. Active Paimon cue measured 1.329 seconds; initial local generation ~0.602 seconds and a fresh-process cache load ~8 ms.

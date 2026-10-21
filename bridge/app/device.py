@@ -127,7 +127,9 @@ class DeviceLink:
         with self._lock:
             if not self._state['connected'] or self._state['wake_protocol'] != 1:
                 return False
-            if action == 1 and (self._state['listening'] or self._state['playing'] or self._state['device_playing']):
+            ended = self._state.get('playback_finished_generation') == self._playback_generation
+            speaker_busy = self._state['playing'] or (self._state['device_playing'] and not ended)
+            if action == 1 and (self._state['listening'] or speaker_busy):
                 return False
             self._capture_command = (action, self._capture_generation if generation is None else generation)
             return True

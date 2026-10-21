@@ -33,7 +33,7 @@ class WakeAcknowledgement:
                     raise ValueError('Invalid wake cue format')
                 pcm.extend(audio.readframes(audio.getnframes()))
         signal = np.frombuffer(pcm, dtype='<i2')
-        if not signal.size or len(signal) > 160000:
+        if len(signal) < 160 or len(signal) > 160000:
             raise ValueError('Invalid wake cue length')
         active = np.flatnonzero(np.abs(signal.astype(float)) > max(3, np.max(np.abs(signal.astype(float)))*.015))
         if not active.size:
@@ -46,19 +46,43 @@ class WakeAcknowledgement:
             audio.writeframes(signal.tobytes())
         return result.getvalue()
 
+    @staticmethod
+    def _rhythm(clip):
+        with wave.open(io.BytesIO(clip), 'rb') as audio:
+            signal = np.frombuffer(audio.readframes(audio.getnframes()), dtype='<i2').astype(float)
+        duration = len(signal)/16000
+        frames = signal[:len(signal)//160*160].reshape(-1, 160)
+        energy = np.sqrt(np.mean(frames*frames, axis=1))
+        active = np.flatnonzero(energy >= max(8, energy.max()*.08))
+        longest = run = 0
+        if active.size:
+            for value in energy[active[0]:active[-1]+1]:
+                run = run+1 if value < max(8, energy.max()*.08) else 0
+                longest = max(longest, run)
+        return duration, longest*.01
+
     def prepare(self, cancelled=lambda: False):
         with self._lock:
             voice = selected_voice(self.data_dir)
             if voice == self._voice and self._clips:
                 return True
-            identity = hashlib.sha256(('wake-cue-v2|在呢。|' + voice).encode()).hexdigest()[:24]
+            identity = hashlib.sha256(('wake-cue-v3|在呢！|' + voice).encode()).hexdigest()[:24]
             path = self.data_dir / 'cache' / 'wake-cues' / (identity + '.wav')
             try:
                 if path.stat().st_size > 320044:
                     raise ValueError('Oversized cue')
                 clip = self._compact([path.read_bytes()])
             except (OSError, ValueError, wave.Error, EOFError):
-                clip = self._compact(tuple(synthesize_chunks('在呢。', self.data_dir, cancelled=cancelled)))
+                candidates = []
+                for _ in range(3):
+                    if cancelled() or self._stopped.is_set():
+                        return False
+                    generated = self._compact(tuple(synthesize_chunks('在呢！', self.data_dir, cancelled=cancelled)))
+                    duration, gap = self._rhythm(generated)
+                    candidates.append((duration + gap*4, generated))
+                    if duration <= 1.05 and gap <= .08:
+                        break
+                clip = min(candidates, key=lambda item: item[0])[1]
             if cancelled() or self._stopped.is_set() or selected_voice(self.data_dir) != voice:
                 return False
             self._voice, self._clips = voice, (clip,)

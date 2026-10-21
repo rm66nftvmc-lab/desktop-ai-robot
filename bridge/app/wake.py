@@ -273,7 +273,8 @@ class WakeWorker:
             self._state = 'waking'
             self._started = time.monotonic()
             if not self.device.request_capture(1):
-                self._state, self._error = 'error', '设备正忙，暂时无法唤醒'
+                self._state, self._error = 'armed', '设备正忙，请稍后重新呼叫'
+                self._cooldown = time.monotonic() + .8
 
     def _run(self):
         while not self._stop.is_set():
