@@ -2,6 +2,45 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const ui = require('../ui-state.js');
 
+function logoutHarness(request) {
+  const fs = require('node:fs'), vm = require('node:vm');
+  const source = fs.readFileSync(require.resolve('../app.js'), 'utf8');
+  const nodes = new Map(); let click;
+  const node = selector => {
+    if (!nodes.has(selector)) nodes.set(selector, { value:'secret', disabled:false, textContent:'',
+      focus(){ this.focused=true; }, addEventListener(type, fn){ click=fn; } });
+    return nodes.get(selector);
+  };
+  const h = vm.createContext({ $:node, request, drafts:new Map([['one','draft']]), draftContext:'one',
+    prompt:{value:'unsent'}, loggedOut:false, showLogin(){ h.loggedOut=true; } });
+  const start = source.indexOf('$("#logout").addEventListener');
+  vm.runInContext(source.slice(start, source.indexOf('\nsetTarget();', start)), h);
+  return { h, node, click };
+}
+
+test('logout waits for server revocation, blocks duplicate clicks and then clears private inputs', async () => {
+  let finish, calls=0;
+  const {h,node,click}=logoutHarness((path,options)=>{
+    assert.equal(path,'/api/logout'); assert.equal(options.method,'POST'); calls++;
+    return new Promise(resolve=>{finish=resolve;});
+  });
+  const pending=click(); await click();
+  assert.equal(calls,1); assert.equal(h.loggedOut,false); assert.equal(node('#logout').disabled,true);
+  finish({ok:true}); await pending;
+  assert.equal(h.loggedOut,true); assert.equal(h.drafts.size,0); assert.equal(h.prompt.value,'');
+  assert.equal(node('#key').value,''); assert.equal(node('#key').focused,true); assert.equal(node('#logout').disabled,false);
+});
+
+test('logout failure keeps the workspace and draft; an expired session can return to login', async () => {
+  for (const status of [undefined,500,401]) {
+    const {h,node,click}=logoutHarness(async()=>{throw Object.assign(Error('unavailable'),{status});});
+    await click();
+    assert.equal(h.loggedOut,status===401); assert.equal(h.drafts.size,status===401?0:1);
+    assert.equal(node('#logout').disabled,false);
+    if(status!==401) assert.match(node('#send-error').textContent,/退出未确认/);
+  }
+});
+
 test('audition stays on its bound voice and waits while a theme switch is pending', async () => {
   const fs = require('node:fs'), vm = require('node:vm');
   const code = fs.readFileSync(require.resolve('../app.js'), 'utf8');

@@ -1072,8 +1072,19 @@ source.addEventListener("change", () => {
   setTarget(); renderSessions(); syncVoiceTarget(); refreshStatus(); refreshMessages();
 });
 $("#logout").addEventListener("click", async () => {
-  try { await request("/api/logout", { method: "POST" }); } finally {
-    drafts.clear(); draftContext = null; prompt.value = ""; showLogin();
+  const button = $("#logout");
+  if (button.disabled) return;
+  button.disabled = true;
+  $("#send-error").textContent = "";
+  try {
+    try { await request("/api/logout", { method: "POST" }); }
+    catch (error) { if (error.status !== 401) throw error; }
+    drafts.clear(); draftContext = null; prompt.value = ""; $("#key").value = ""; showLogin();
+    $("#key").focus();
+  } catch (error) {
+    $("#send-error").textContent = "退出未确认，请重试。" + error.message;
+  } finally {
+    button.disabled = false;
   }
 });
 

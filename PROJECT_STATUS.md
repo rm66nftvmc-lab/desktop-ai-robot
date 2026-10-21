@@ -2,6 +2,12 @@
 
 Last updated: 2026-10-21
 
+## Visible logout control (2026-10-21)
+
+- Moved logout from the collapsed sidebar to an always-visible top-right “退出” button, with a 44px minimum touch target. Successful logout clears the input/drafts/key and returns to the access-key screen. Expired sessions also return to login; network/server errors retain the workspace and show a retry error instead of claiming authorization was revoked.
+- Logout revokes the current browser session. Hardware voice stops when no other authorized browser sessions remain; this is not an all-devices logout.
+- Validation: 21 frontend tests and 9 voice-access backend tests passed; JavaScript syntax and diff checks passed. Live HTTP confirmed the single logout control is inside the header and updated asset versions are served.
+
 ## Connection notice and voice authorization (2026-10-21)
 
 - User requests the exact spoken notice “连接不上，没有大白饭吃，工作不了哟” for connection problems and explicitly requires that agents cannot be invoked without the access key. Existing web routes already required authenticated sessions; the separate hardware voice route previously did not require a web authorization grant. That gap is now closed.
@@ -9,7 +15,7 @@ Last updated: 2026-10-21
 - Microphone input is checked before ASR/approval/submission; queued text requests bind to their own browser session, queued voice to their original grant. Workers recheck immediately before model dispatch; logout/expiry cancels pending/running work and CLI checks every 0.5 seconds. Local stop/cleanup requests can continue for already-sent runs; remote instantaneous cancellation is not guaranteed. New login cannot revive a revoked old voice request.
 - Wake connection gate checks authorization before probing agents. Missing authorization/target or unavailable selected local API plays the cached notice, returns to armed and never starts capture or prompts an agent. Both cues retain current voice/mute. Paimon notice generated locally, ~6.495 seconds; this fixed audio is private, no user background audio stored.
 - Bounded Harness read-only health uses an independent cookie jar, 0.4-second login/read timeouts and 2-second cache; never starts a Host or sends prompts. Existing Hermes authenticated capabilities health retained. Model-provider internet failures after local preflight remain possible.
-- Validation: 205 backend tests passed. Live unauthenticated Hermes and Harness POSTs returned 401; authorized disposable Hermes text test completed and only its own session was removed. Diagnostic login still left voice_authorized=false. Both local API health checks succeeded. Bridge restarted with cached normal/failure cues ready; human notice audition requested, pending.
+- Validation: 205 backend tests passed. Live unauthenticated Hermes and Harness POSTs returned 401; authorized disposable Hermes text test completed and only its own session was removed. Diagnostic login still left voice_authorized=false. Both local API health checks succeeded. Bridge restarted with cached normal/failure cues ready; user confirmed the unauthenticated wake/notice behavior works correctly.
 - Fully stopped Bridge/PC or disconnected robot cannot detect the wake phrase with the present PC-hosted recognizer. MCU offline wake remains unimplemented; no new firmware, wiring or display changes in this task.
 
 ## Wake cue rhythm replacement (2026-10-21)

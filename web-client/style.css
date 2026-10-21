@@ -122,6 +122,10 @@ p { margin: 0; }
   touch-action: pan-y;
 }
 .chat-target-heading { min-width: 0; max-width: 100%; flex: 1 1 auto; margin: 0; padding: 6px 10px; display: flex; align-items: center; gap: 10px; border: 1px solid transparent; border-radius: 12px; color: #eaf0f7; cursor: pointer; }
+.logout-button { flex: none; min-width: 44px; min-height: 44px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 10px; background: transparent; color: #b9c9da; font-size: .78rem; white-space: nowrap; }
+.logout-button:hover { color: #eaf0f7; background: #23384c; }
+.logout-button:focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
+.logout-button:disabled { opacity: .55; cursor: wait; }
 .chat-target-heading:hover { background: #192635; border-color: #2b4054; }
 .chat-target-heading:focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
 .chat-heading { min-width: 0; }

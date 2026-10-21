@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>桌面 AI 机器人 · Bridge</title>
-  <link rel="stylesheet" href="/assets/style.css?v=23">
+  <link rel="stylesheet" href="/assets/style.css?v=24">
 </head>
 <body>
   <section id="login" class="login-screen">
@@ -61,7 +61,6 @@
         <button type="button" id="download-diagnostics" class="text-button">下载连接诊断</button>
         <p id="diagnostics-error" class="form-error" role="alert"></p>
         <span>手机端仅使用文字输入</span>
-        <button type="button" id="logout" class="text-button">退出登录</button>
       </div>
     </aside>
 
@@ -126,6 +125,7 @@
             <p id="audio-output-error" class="form-error" role="alert"></p>
           </section>
         </div>
+        <button type="button" id="logout" class="logout-button" title="退出登录" aria-label="退出登录">退出</button>
       </header>
 
       <div id="messages" class="timeline" role="log" aria-label="对话消息" aria-live="polite" aria-relevant="additions text"></div>
@@ -152,6 +152,6 @@
     </main>
   </div>
   <script src="/assets/ui-state.js?v=2" defer></script>
-  <script src="/assets/app.js?v=32" defer></script>
+  <script src="/assets/app.js?v=33" defer></script>
 </body>
 </html>
