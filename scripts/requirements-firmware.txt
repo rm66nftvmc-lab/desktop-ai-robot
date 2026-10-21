@@ -1,0 +1,4 @@
+# Build tools only. IDF 4's PlatformIO adapter still imports pkg_resources.
+platformio==6.2.0
+setuptools==80.9.0
+pyelftools==0.33

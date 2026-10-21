@@ -1,11 +1,12 @@
 // One explicit USB command, one radio attempt, no credentials or retry loop.
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
+#include <fcntl.h>
 #include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"
-#include "driver/usb_serial_jtag.h"
 #include "esp_system.h"
 #include "esp_heap_caps.h"
 #include "esp_wifi.h"
@@ -14,6 +15,7 @@
 #include "nvs_flash.h"
 
 _Static_assert(CONFIG_ESP_PHY_MAX_WIFI_TX_POWER == 10, "SDK PHY power cap missing");
+_Static_assert(CONFIG_ESP_PHY_MAX_TX_POWER == 10, "PHY initialization table cap missing");
 _Static_assert(CONFIG_ESP_PHY_REDUCE_TX_POWER == 1, "SDK brownout power reduction missing");
 _Static_assert(CONFIG_ESP32S3_BROWNOUT_DET == 1, "Brownout protection must stay enabled");
 _Static_assert(CONFIG_ESP32S3_BROWNOUT_DET_LVL == 7, "Keep production brownout threshold");
@@ -29,7 +31,8 @@ static void report(const char *stage, esp_err_t result) {
         stage, (int)result, esp_err_to_name(result), (int)esp_reset_reason(),
         CONFIG_ESP_PHY_MAX_WIFI_TX_POWER, CONFIG_ESP32S3_BROWNOUT_DET_LVL,
         esp_get_idf_version(), (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT));
-    usb_serial_jtag_write_bytes(line, n, pdMS_TO_TICKS(300));
+    fwrite(line, 1, n, stdout);
+    fflush(stdout);
     vTaskDelay(pdMS_TO_TICKS(50));
 }
 
@@ -73,8 +76,8 @@ void app_main(void) {
     for (size_t i=0; i<sizeof(high)/sizeof(high[0]); ++i) {
         gpio_set_level(high[i], 1); gpio_set_direction(high[i], GPIO_MODE_OUTPUT);
     }
-    usb_serial_jtag_driver_config_t usb = {.tx_buffer_size=1024, .rx_buffer_size=256};
-    ESP_ERROR_CHECK(usb_serial_jtag_driver_install(&usb));
+    // Use the SDK console, including early startup/panic output, on native USB.
+    fcntl(STDIN_FILENO, F_SETFL, O_NONBLOCK);
     char command[32] = {0};
     size_t used = 0;
     bool ran = false;
@@ -84,7 +87,7 @@ void app_main(void) {
             report("ready", ESP_OK); ready = xTaskGetTickCount();
         }
         char c;
-        if (usb_serial_jtag_read_bytes(&c, 1, pdMS_TO_TICKS(20)) <= 0) continue;
+        if (read(STDIN_FILENO, &c, 1) <= 0) {vTaskDelay(pdMS_TO_TICKS(20)); continue;}
         if (c=='\n') {
             if (!ran && !strcmp(command, "RUN_RADIO")) {ran=true; run_probe();}
             used=0; command[0]=0;

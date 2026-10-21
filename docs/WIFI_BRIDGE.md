@@ -106,3 +106,11 @@ CLI 会在断开后尝试重新握手，并读取 STATUS / NETWORK_STATUS；成�
 独立工程位于 `voice-device/diagnostics/wifi-sdk`，说明及恢复要求见其 README。使用 IDF 4.4.7 源码构建，目标 PHY 10 dBm、CPU 80 MHz、关闭 PSRAM，启用官方欠压后降功率配置并保留原欠压保护等级。需要成功构建和 `scripts/verify_wifi_sdk_build.py` 验证后才能安排临时烧录。
 
 目前依赖下载网络连接失败，本机没有所需 SDK 缓存，故本轮没有烧录或新增无线测试结果。1.60 正常固件和全部接线保持原状。不要将准备好的配置文件误记为 SDK 配置已生效，或将低功率选项误记为 Wi-Fi 已修复。
+
+## SDK 10 dBm 已实测（2026-10-21 续）
+
+经 Windows 当前代理重试后，依赖下载和 GitHub fetch 成功。独立 IDF 4.4.7 已从源码构建，使用 `scripts/build_wifi_sdk.ps1` 读取代理并规避中文构建路径；`scripts/verify_wifi_sdk_build.py` 核对配置和 ELF 中 14 个 PHY 初始化功率值均为 10 dBm。
+
+保持接线，CPU 80 MHz，无 PSRAM、动画和 I2S，保留欠压等级 7。有效实测初始化 API 均成功，进入 `esp_wifi_start` 前内部空闲 307,124 B，随后 USB 断连；恢复报告 **reset_reason=1，上电复位**。本次不能写成欠压复位 9，也未触发官方欠压后降功率分支；无线启动仍未成功。最初无就绪日志的 USB 驱动版本不构成射频结果，最终证据来自可正常输出阶段的 SDK USB 控制台版本。
+
+原 1.60 应用覆盖范围已恢复，整份镜像 digest 校验通过；Bridge USB、扬声器就绪和动画状态恢复，错误计数 0。没有改动启动器、分区表、凭据或接线。阶段和构建证据见 `docs/wifi-sdk-low-power-results.json`。本轮结论是底层 10 dBm 配置不足以解决问题，不能把 Wi-Fi 标记完成。
