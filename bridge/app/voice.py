@@ -81,6 +81,12 @@ class VoiceConversation:
             self._state, self._last_error = "error", error
         self.device.set_face(faces.ERROR)
 
+    def on_capture_cancelled(self, capture_generation):
+        with self._lock:
+            if capture_generation == self._capture_generation:
+                self._capture_generation += 1
+                self._state, self._last_error = 'idle', None
+
     def on_device_disconnect(self) -> None:
         # Keep already-sent agent work in the text history. Invalidate capture
         # and speech so reconnecting never replays or resends an old task.

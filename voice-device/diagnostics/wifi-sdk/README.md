@@ -19,10 +19,20 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build_wifi_sdk.ps1
 
 实物对照要求：
 
-1. 停止 Bridge 串口占用；验证当前完整 1.60 备份与设备 flash 一致。
+1. 停止 Bridge 串口占用；验证当前生产固件备份与设备 flash 一致。此前实测基线为 1.60，现已升级 1.61；后续对照必须恢复新的当前镜像，不可直接复用写死 1.60 的临时脚本。
 2. 只覆盖 `0x10000` 开始的诊断应用范围，不写 bootloader、分区表或 NVS；提前保存其按 4096 字节对齐的原固件覆盖范围。
 3. 使用 `scripts/read_minimal_wifi_probe.py`，收到 `ready` 才发送一次 `RUN_RADIO`；固件本身不会自动启动或重试射频。不保存任何 Wi-Fi 凭据，不擦除 NVS。
 4. 记录生成配置、镜像哈希、最后成功阶段与复位原因。欠压后仍须明确触发下一轮，禁止自动重试循环。
 5. 无论成功或失败都恢复原覆盖范围，再对整份原固件做 digest 校验，最后恢复 Bridge 并检查 USB、声音和动画状态。
 
 外设未断开，所以软件停钟/暂停计算不等于移除了背光及外设的静态负载。通过射频启动/被动扫描也不等于已通过无线录音和播音验收。
+
+## 下一轮：LCD 控制器休眠对照（仅构建，未烧录）
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build_wifi_sdk.ps1 -Environment low-power-lcd-sleep
+```
+
+该变体收到同一个显式 RUN_RADIO 命令后，通过当前 CS8/DC9/MOSI11/SCLK12 发送 ST7789 DISPOFF(0x28)、SLPIN(0x10)，等待 150ms，再进入相同的 10 dBm 射频启动流程。阶段名 lcd_sleep_requested 仅表示命令已发送；屏幕没有读回通道，不能声称已测量到休眠或省电。BLK 仍由 3V3 供电，功放和麦克风线仍在，不能称为仅主控测试。
+
+本变体编译和产物检查已通过（616,704 B），尚未烧录。保留当前唤醒测试，未中断设备去做这项对照；后续须先备份并校验当前完整 1.61，再受控测试并恢复。

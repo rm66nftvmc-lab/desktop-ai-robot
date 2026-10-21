@@ -89,6 +89,14 @@
               <p id="display-state" class="muted" role="status"></p>
               <p id="display-error" class="form-error" role="alert"></p>
               <div class="bound-voice-row"><span>回复声线</span><strong id="bound-voice">派蒙</strong></div>
+              <div class="bound-voice-row">
+                <label class="wake-switch" for="wake-enabled"><input type="checkbox" id="wake-enabled">语音唤醒</label>
+                <span id="wake-state" role="status">未启用</span>
+              </div>
+              <span>你好，大肥鱼</span>
+              <label for="wake-channel">麦克风声道</label>
+              <select id="wake-channel"><option value="auto">自动选择</option><option value="left">左声道</option><option value="right">右声道</option></select>
+              <p id="wake-error" class="form-error" role="alert"></p>
               <form id="tts-form" class="stack-form">
                 <div id="voice-presets" class="stack-form">
                   <label for="voice-test-language">试听语言</label>

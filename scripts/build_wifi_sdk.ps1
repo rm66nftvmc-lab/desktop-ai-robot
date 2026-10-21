@@ -1,4 +1,5 @@
 # Build only; never uploads. Inherit the Windows proxy for this process only.
+param([ValidateSet('low-power','low-power-lcd-sleep')][string]$Environment = 'low-power')
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $python = Join-Path $repo '.venv\Scripts\python.exe'
@@ -29,9 +30,9 @@ try {
             }
         }
     }
-    & $python -m platformio run -d (Join-Path $repo 'voice-device\diagnostics\wifi-sdk')
+    & $python -m platformio run -d (Join-Path $repo 'voice-device\diagnostics\wifi-sdk') -e $Environment
     if ($LASTEXITCODE -ne 0) { throw 'SDK build failed; no firmware was uploaded.' }
-    & $python (Join-Path $repo 'scripts\verify_wifi_sdk_build.py')
+    & $python (Join-Path $repo 'scripts\verify_wifi_sdk_build.py') --environment $Environment
     if ($LASTEXITCODE -ne 0) { throw 'SDK build verification failed; no firmware was uploaded.' }
 } finally {
     $env:HTTP_PROXY = $previousHttp

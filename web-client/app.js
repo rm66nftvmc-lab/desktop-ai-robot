@@ -730,6 +730,13 @@ async function refreshStatus() {
     const status = await request("/api/status");
     showWorkspace();
     updateDevice(status.device);
+    if (!wakePending && status.wake) {
+      $("#wake-enabled").checked = status.wake.enabled;
+      $("#wake-channel").value = status.wake.mic_channel;
+      const wakeLabels = {disabled:"未启用", loading:"准备中", armed:"待命", paused:"暂时暂停", waking:"正在唤醒", recording:"录音中", manual:"按键录音", finishing:"识别中", error:"不可用"};
+      $("#wake-state").textContent = status.device.connected ? (wakeLabels[status.wake.state] || "准备中") : "设备未连接";
+      $("#wake-error").textContent = status.wake.last_error || wakeConfigError;
+    }
     if (!displayPending) {
       const desired = status.device.desired_theme === 1 ? "qiuqiu" : "dsh_pet";
       $("#display-theme").value = desired;
@@ -982,6 +989,29 @@ $("#display-toggle").addEventListener("click", () => setDisplayPanel($("#display
 $("#display-panel").addEventListener("keydown", (event) => {
   if (event.key === "Escape") { setDisplayPanel(false); $("#display-toggle").focus(); }
 });
+let wakePending = false;
+let wakeConfigError = "";
+async function changeWakeSettings() {
+  if (wakePending) return;
+  wakePending = true;
+  $("#wake-enabled").disabled = $("#wake-channel").disabled = true;
+  try {
+    await request("/api/voice/wake", { method:"POST", timeout:30000,
+      body:JSON.stringify({enabled:$("#wake-enabled").checked, mic_channel:$("#wake-channel").value}) });
+    $("#wake-error").textContent = "";
+    wakeConfigError = "";
+  } catch (error) {
+    wakeConfigError = error.message;
+    $("#wake-error").textContent = error.message;
+  } finally {
+    wakePending = false;
+    $("#wake-enabled").disabled = $("#wake-channel").disabled = false;
+    refreshStatus();
+  }
+}
+$("#wake-enabled").addEventListener("change", changeWakeSettings);
+$("#wake-channel").addEventListener("change", changeWakeSettings);
+
 $("#display-theme").addEventListener("change", async (event) => {
   displayPending = true;
   event.target.disabled = true;

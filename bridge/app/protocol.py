@@ -26,6 +26,9 @@ ANIMATION = 0x0D
 THEME = 0x0E
 SCREEN_TEST = 0x0F  # Local serial diagnostic: 0 normal, 1 hold, 2 repeat pose, 3 compute without LCD writes.
 NETWORK_STATUS = 0x14  # Separate diagnostic packet keeps the original STATUS below 1024 bytes.
+WAKE_CONFIG = 0x15
+WAKE_AUDIO = 0x16
+CAPTURE_CONTROL = 0x17  # 1 start, 0 finish, 2 cancel; BUTTON confirms the result.
 
 
 @dataclass(frozen=True)

@@ -1,5 +1,6 @@
 """Reject an absent/stale SDK probe build; report evidence without flashing."""
 import hashlib
+import argparse
 import json
 import os
 from pathlib import Path
@@ -14,8 +15,10 @@ BUILD = Path(os.environ.get('PLATFORMIO_BUILD_DIR') or
               if os.name == 'nt' else str(PROJECT / '.pio/build'))) / 'low-power'
 
 
-def verify():
-    build = BUILD
+def verify(environment='low-power'):
+    if environment not in ('low-power', 'low-power-lcd-sleep'):
+        raise ValueError('Unknown diagnostic environment')
+    build = BUILD.parent / environment
     header = build / 'config/sdkconfig.h'
     image = build / 'firmware.bin'
     expected = {
@@ -63,15 +66,20 @@ def verify():
         raise ValueError('Unexpected diagnostic application size or image header')
     if b'4.4.7' not in data:
         raise ValueError('Expected IDF 4.4.7 application metadata missing')
-    return {'configuration': expected, 'phy_source_compiled': True,
+    if environment == 'low-power-lcd-sleep' and b'lcd_sleep_requested' not in data:
+        raise ValueError('LCD sleep diagnostic stage missing from image')
+    return {'configuration': expected, 'environment': environment, 'phy_source_compiled': True,
             'linked_phy_power_entries': list(init_data[2:16]),
             'image_bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest(),
             'hardware_tested': False}
 
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--environment', choices=['low-power','low-power-lcd-sleep'], default='low-power')
+    args = parser.parse_args()
     try:
-        print(json.dumps(verify(), indent=2))
+        print(json.dumps(verify(args.environment), indent=2))
     except (OSError, ValueError, KeyError) as exc:
         print(f'SDK probe is not ready: {exc}', file=sys.stderr)
         sys.exit(1)

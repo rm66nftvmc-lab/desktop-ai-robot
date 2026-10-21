@@ -26,6 +26,7 @@ from .hermes_api import HermesRunsClient
 from .security import (SESSION_SECONDS, Sessions, anchor_path, load_or_create_token,
                        record_or_verify_data_dir, resolve_data_dir)
 from .speech import SpeechWorker
+from .wake import WakeWorker
 from .storage import add_message, initialize, list_messages, set_delivery, get_setting, set_setting
 from .tts import (SynthesisCancelled, selected_voice, set_selected_voice, remember_voice, synthesize_chunks,
                   start_voice_service, stop_voice_services, voice_status,
@@ -86,6 +87,11 @@ class VoiceBody(BaseModel):
     voice: str
 
 
+class WakeBody(BaseModel):
+    enabled: bool = Field(strict=True)
+    mic_channel: str = Field(default='auto', pattern='^(auto|left|right)$')
+
+
 class AnimationBody(BaseModel):
     enabled: bool
 
@@ -132,7 +138,11 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
     audio_output = AudioOutput(data_dir)
     network = NetworkDevices(data_dir)
     device = DeviceLink(speech.enqueue, lambda generation: voice.on_listen_start(generation),
-                        audio_output=audio_output, on_disconnect=lambda: voice.on_device_disconnect(), network=network)
+                        audio_output=audio_output,
+                        on_disconnect=lambda: (voice.on_device_disconnect(), wake.disconnected()), network=network,
+                        on_mic_audio=lambda pcm, capture, generation: wake.feed(pcm, capture, generation),
+                        on_capture_state=lambda listening, generation: wake.capture_changed(listening, generation),
+                        on_cancel=lambda generation: voice.on_capture_cancelled(generation))
     theme = get_setting(database, 'display_theme')
     if theme not in ('qiuqiu', 'dsh_pet'):
         theme = 'dsh_pet'
@@ -146,6 +156,10 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
                               validate_target=conversations.resolve_writable)
     speech.on_transcript = voice.on_transcript
     speech.on_error = voice.on_speech_error
+    wake = WakeWorker(database, data_dir, device, voice_busy=lambda:
+                      speech.snapshot()['state'] in ('queued', 'transcribing') or voice.snapshot()['state'] in (
+                          'listening', 'listening_for_approval', 'sending', 'waiting_for_hermes', 'waiting_for_agent',
+                          'queued_to_speak', 'speaking', 'approval_prompt', 'approval_pending'))
     runtime = RuntimeStatus()
     playback = PlaybackControl(device)
     hermes.on_reply = voice.on_reply
@@ -171,9 +185,11 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
         hermes.start()
         harness.start()
         voice.start()
+        wake.start()
         try:
             yield
         finally:
+            wake.stop()
             network.stop()
             device.stop()
             speech.stop()
@@ -190,6 +206,7 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
     app.state.harness = harness
     app.state.voice = voice
     app.state.audio_output = audio_output
+    app.state.wake = wake
     allowed_hosts = ["127.0.0.1", "localhost"]
     tailnet_host = os.environ.get("ROBOT_TAILNET_HOST", "").strip().lower()
     if tailnet_host:
@@ -259,6 +276,7 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
             "device": device.snapshot(),
             "device_network": network.snapshot(),
             "speech": speech.snapshot(),
+            "wake": wake.snapshot(),
             "voice": voice.snapshot(),
             "audio_output": audio_output.snapshot(),
             "tts": voice_status(data_dir),
@@ -293,6 +311,14 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
                 voice.set_target(body.source, None)
                 raise HTTPException(status_code=503, detail=str(exc)) from exc
         return voice.set_target(body.source, body.session_id)
+
+    @app.post('/api/voice/wake', dependencies=[Depends(require_session)])
+    def configure_wake(body: WakeBody, request: Request) -> dict:
+        check_origin(request)
+        try:
+            return wake.update(body.enabled, body.mic_channel)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     @app.post("/api/audio/output", dependencies=[Depends(require_session)])
     def set_audio_output(body: AudioOutputBody, request: Request) -> dict:

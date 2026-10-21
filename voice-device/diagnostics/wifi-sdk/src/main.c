@@ -13,6 +13,27 @@
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "nvs_flash.h"
+#include "esp_rom_sys.h"
+
+#ifdef PROBE_LCD_SLEEP
+#define PROBE_VARIANT "sdk-low-power-lcd-sleep"
+static void lcd_command(uint8_t command) {
+    gpio_set_level(8, 0); // Existing ST7789 CS/DC/MOSI/SCLK wiring.
+    gpio_set_level(9, 0);
+    for (unsigned mask=128; mask; mask>>=1) {
+        gpio_set_level(12, 0);
+        gpio_set_level(11, (command & mask) != 0);
+        esp_rom_delay_us(2);
+        gpio_set_level(12, 1);
+        esp_rom_delay_us(2);
+    }
+    gpio_set_level(12, 0);
+    gpio_set_level(8, 1);
+    gpio_set_level(9, 1);
+}
+#else
+#define PROBE_VARIANT "sdk-low-power"
+#endif
 
 _Static_assert(CONFIG_ESP_PHY_MAX_WIFI_TX_POWER == 10, "SDK PHY power cap missing");
 _Static_assert(CONFIG_ESP_PHY_MAX_TX_POWER == 10, "PHY initialization table cap missing");
@@ -24,7 +45,7 @@ _Static_assert(CONFIG_ESP32S3_DEFAULT_CPU_FREQ_MHZ == 80, "Keep diagnostic CPU a
 static void report(const char *stage, esp_err_t result) {
     char line[512];
     int n = snprintf(line, sizeof(line),
-        "{\"probe\":\"minimal-radio-1\",\"variant\":\"sdk-low-power\",\"stage\":\"%s\","
+        "{\"probe\":\"minimal-radio-1\",\"variant\":\"" PROBE_VARIANT "\",\"stage\":\"%s\","
         "\"result\":%d,\"result_name\":\"%s\",\"reset_reason\":%d,\"psram\":false,"
         "\"cpu_mhz\":80,\"phy_max_dbm\":%d,\"reduce_tx_power\":true,"
         "\"brownout_level\":%d,\"idf_version\":\"%s\",\"free_internal\":%u}\n",
@@ -43,6 +64,14 @@ static bool step(const char *name, esp_err_t result) {
 
 static void run_probe(void) {
     report("begin", ESP_OK);
+#ifdef PROBE_LCD_SLEEP
+    lcd_command(0x28); // DISPOFF, then SLPIN. BLK supply is not switched.
+    vTaskDelay(pdMS_TO_TICKS(10));
+    lcd_command(0x10);
+    vTaskDelay(pdMS_TO_TICKS(150));
+    // Write-only SPI has no acknowledgement; do not claim measured power-off.
+    report("lcd_sleep_requested", ESP_OK);
+#endif
     if (!step("nvs_init", nvs_flash_init())) return; // Never erase existing NVS.
     if (!step("netif_init", esp_netif_init())) return;
     if (!step("event_loop", esp_event_loop_create_default())) return;

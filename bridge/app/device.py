@@ -40,7 +40,8 @@ def find_port() -> str | None:
 class DeviceLink:
     MAX_CAPTURE_BYTES = 60 * 16000 * 2
 
-    def __init__(self, on_capture=None, on_listen_start=None, *, audio_output=None, on_disconnect=None, network=None):
+    def __init__(self, on_capture=None, on_listen_start=None, *, audio_output=None, on_disconnect=None, network=None,
+                 on_mic_audio=None, on_capture_state=None, on_cancel=None):
         self.network = network
         self.audio_output = audio_output if audio_output is not None else AudioOutput()
         self._lock = threading.Lock()
@@ -51,6 +52,12 @@ class DeviceLink:
         self._on_capture = on_capture
         self._on_listen_start = on_listen_start
         self._on_disconnect = on_disconnect
+        self._on_mic_audio = on_mic_audio
+        self._on_capture_state = on_capture_state
+        self._on_cancel = on_cancel
+        self._wake_desired = (False, 0)
+        self._wake_pending = True
+        self._capture_command = None
         self._capture_generation = 0
         self._playback: bytes | None = None
         self._playback_offset = 0
@@ -102,6 +109,43 @@ class DeviceLink:
         self._pending_theme = 2
         self._state['display_theme'] = None
         self._state['desired_theme'] = 2
+        self._state['wake_protocol'] = None
+        self._state['wake_device_enabled'] = False
+
+    def configure_wake(self, enabled, channel=0):
+        with self._lock:
+            self._wake_desired = (bool(enabled), channel)
+            self._wake_pending = True
+            if not enabled:
+                self._state['wake_device_enabled'] = False
+            if not enabled and self._capture_command and self._capture_command[0] == 1:
+                self._capture_command = None
+
+    def request_capture(self, action, generation=None):
+        with self._lock:
+            if not self._state['connected'] or self._state['wake_protocol'] != 1:
+                return False
+            if action == 1 and (self._state['listening'] or self._state['playing'] or self._state['device_playing']):
+                return False
+            self._capture_command = (action, self._capture_generation if generation is None else generation)
+            return True
+
+    def _send_pending_wake(self, port, sequence):
+        with self._lock:
+            if not self._state['connected'] or self._state['wake_protocol'] != 1:
+                return sequence
+            config = self._wake_desired if self._wake_pending else None
+            self._wake_pending = False
+            command, self._capture_command = self._capture_command, None
+            if command and command[1] != self._capture_generation:
+                command = None
+        if config is not None:
+            port.write(protocol.encode(protocol.WAKE_CONFIG, sequence, bytes(config)))
+            sequence = (sequence+1) & 0xFFFF
+        if command:
+            port.write(protocol.encode(protocol.CAPTURE_CONTROL, sequence, bytes([command[0]])))
+            sequence = (sequence+1) & 0xFFFF
+        return sequence
 
     def set_theme(self, theme: int) -> None:
         if type(theme) is not int or theme not in (1, 2):
@@ -264,6 +308,8 @@ class DeviceLink:
             self._playback_offset = 0
             self._playback_open = False
             self._state.update(connected=False, listening=False, playing=False, device_playing=False)
+            self._state.update(wake_protocol=None, wake_device_enabled=False)
+            self._capture_command = None
         if active and self._on_disconnect:
             self._on_disconnect()
 
@@ -286,13 +332,21 @@ class DeviceLink:
                 return sequence
             if self.snapshot()["connected"]:
                 self._connection_lost()
-            self._update(connected=True, firmware=hello.get("firmware"), last_error=None)
+            self._update(connected=True, firmware=hello.get("firmware"), last_error=None,
+                         wake_protocol=hello.get('wake_protocol'))
             self.set_face(faces.READY)
             with self._lock:
                 self._pending_theme = self._desired_theme
+                self._wake_pending = True
             port.write(protocol.encode(protocol.WELCOME, sequence, b'{"protocol":1}'))
             return (sequence + 1) & 0xFFFF
-        if frame.kind == protocol.NETWORK_STATUS:
+        if frame.kind == protocol.WAKE_CONFIG and len(frame.payload) == 2 and self.snapshot()['connected']:
+            self._update(wake_device_enabled=bool(frame.payload[0]), mic_channel=frame.payload[1])
+        elif frame.kind == protocol.WAKE_AUDIO and len(frame.payload) % 2 == 0:
+            state = self.snapshot()
+            if self._on_mic_audio and state['connected'] and state['wake_device_enabled']:
+                self._on_mic_audio(frame.payload, False, self._capture_generation)
+        elif frame.kind == protocol.NETWORK_STATUS:
             try:
                 status = json.loads(frame.payload)
                 self._update(**{key: status.get(key) for key in (
@@ -350,6 +404,8 @@ class DeviceLink:
                 self.set_face(faces.LISTEN)
                 if self._on_listen_start:
                     self._on_listen_start(capture_generation)
+                if self._on_capture_state:
+                    self._on_capture_state(True, capture_generation)
             else:
                 with self._lock:
                     capture_generation = self._capture_generation
@@ -357,8 +413,15 @@ class DeviceLink:
                     self._state["listening"] = False
                     self._last_capture = bytes(self._capture)
                     self._capture.clear()
-                self.set_face(faces.THINK)
-                if self._on_capture:
+                cancelled = frame.payload[0] == 2
+                self.set_face(faces.READY if cancelled else faces.THINK)
+                if self._on_capture_state:
+                    self._on_capture_state(False, capture_generation)
+                if cancelled:
+                    self._last_capture = b''
+                    if self._on_cancel:
+                        self._on_cancel(capture_generation)
+                elif self._on_capture:
                     self._on_capture(self.last_capture_wav(), capture_generation)
         elif frame.kind == protocol.AUDIO_UP and len(frame.payload) % 2 == 0:
             samples = struct.unpack(f"<{len(frame.payload) // 2}h", frame.payload)
@@ -374,6 +437,8 @@ class DeviceLink:
                         self._capture.extend(frame.payload[:remaining])
                         if len(frame.payload) > remaining:
                             self._state["capture_truncated"] = True
+                if self._on_mic_audio:
+                    self._on_mic_audio(frame.payload, True, self._capture_generation)
         return sequence
 
     def _run(self) -> None:
@@ -405,6 +470,7 @@ class DeviceLink:
                         sequence = self._send_pending_face(port, sequence)
                         sequence = self._send_pending_theme(port, sequence)
                         sequence = self._send_pending_animation(port, sequence)
+                        sequence = self._send_pending_wake(port, sequence)
                         if now >= next_heartbeat:
                             port.write(protocol.encode(protocol.HEARTBEAT, sequence))
                             sequence = (sequence + 1) & 0xFFFF

@@ -20,6 +20,10 @@ static constexpr uint8_t FRAME_HEARTBEAT=5, FRAME_BUTTON=6, FRAME_ACK=8;
 static constexpr uint8_t FRAME_HELLO=9, FRAME_WELCOME=10, FRAME_AUDIO_END=11, FRAME_FACE=12;
 static constexpr uint8_t FRAME_ANIMATION=13;
 static constexpr uint8_t FRAME_THEME=14, FRAME_SCREEN_TEST=15;
+static constexpr uint8_t FRAME_WAKE_CONFIG=21,FRAME_WAKE_AUDIO=22,FRAME_CAPTURE_CONTROL=23;
+static bool wakeStreaming=false,captureAutomatic=false,captureJustStarted=false;
+static uint8_t microphoneMode=0,microphoneSlot=0;
+static uint32_t microphoneSelectedAt=0;
 static std::atomic<uint8_t> displayTheme{2};
 static std::atomic<int> pendingTheme{-1};
 static std::atomic<int> pendingFace{-1},pendingColor{-1};
@@ -68,6 +72,7 @@ static uint8_t networkRx[8192];
 static size_t networkRead=0,networkWrite=0;
 static void resetLink() {
   connected=false; listening=false; playing=false; rxLength=0;
+  wakeStreaming=false;captureAutomatic=false;
   networkRead=networkWrite=0;
   if(speakerReady)i2s_zero_dma_buffer(I2S_NUM_1);
   lastHello=0;
@@ -422,6 +427,17 @@ static bool startSpeaker() {
 
 static void pollButton();
 
+static void setListening(bool enabled,bool automatic=false,bool cancelled=false) {
+  if(enabled && playing) {
+    playing=false;
+    if(speakerReady)i2s_zero_dma_buffer(I2S_NUM_1);
+  }
+  listening=enabled;captureAutomatic=enabled&&automatic;captureJustStarted=enabled;
+  const uint8_t state=enabled?1:(cancelled?2:0);
+  sendFrame(FRAME_BUTTON,&state,1);
+  lcdDrawFace(enabled?FACE_ID_LISTEN:(cancelled?FACE_ID_READY:FACE_ID_THINK));
+}
+
 static void handleFrame(uint8_t kind,const uint8_t *payload,uint16_t length) {
   if(kind==18 && !networkSelected && !listening && !playing && length<=1 && (!length || payload[0]<=1)) {
     const unsigned profile=length?payload[0]:0;
@@ -491,6 +507,16 @@ static void handleFrame(uint8_t kind,const uint8_t *payload,uint16_t length) {
     }
     const uint8_t result=ok?1:0;sendFrame(17,&result,1);
     if(ok){delay(100);ESP.restart();}
+  } else if(kind==FRAME_WAKE_CONFIG && connected && length==2 && payload[0]<=1 && payload[1]<=2) {
+    wakeStreaming=payload[0]!=0;microphoneMode=payload[1];
+    if(!wakeStreaming && captureAutomatic && listening)setListening(false,false,true);
+    sendFrame(FRAME_WAKE_CONFIG,payload,2);
+  } else if(kind==FRAME_CAPTURE_CONTROL && connected && micReady && length==1 && payload[0]<=2) {
+    if(payload[0]==1) {
+      if(wakeStreaming && !playing && !listening)setListening(true,true);
+    } else if(listening && captureAutomatic) {
+      setListening(false,false,payload[0]==2);
+    }
   } else if (kind==FRAME_WELCOME && length==14 && memcmp(payload,"{\"protocol\":1}",14)==0) {
     connected=true; lastHost=millis(); lcdDrawFace(FACE_ID_READY);
   } else if (kind==FRAME_FACE && connected && length==1) {
@@ -578,29 +604,34 @@ static void pollButton() {
   if (raw!=stable && millis()-changedAt>=30) {
     stable=raw;
     if (stable==LOW && connected && micReady) {
-      if (playing) {
-        playing=false;
-        if (speakerReady) i2s_zero_dma_buffer(I2S_NUM_1);
-      }
-      listening=!listening;
-      const uint8_t state=listening?1:0;
-      sendFrame(FRAME_BUTTON,&state,1);
-      lcdDrawFace(listening?FACE_ID_LISTEN:FACE_ID_THINK);
+      setListening(!listening);
     }
   }
 }
 
 static void pollMicrophone() {
-  if (!micReady || !listening || !connected) return;
+  if (!micReady || !connected || playing || (!listening && !wakeStreaming)) return;
   int32_t raw[256]; size_t bytes=0;
   if (i2s_read(I2S_NUM_0,raw,sizeof(raw),&bytes,pdMS_TO_TICKS(10))!=ESP_OK) return;
   int16_t mono[128];
   size_t pairs=min(static_cast<size_t>(128),bytes/(sizeof(int32_t)*2));
-  for (size_t i=0;i<pairs;++i) {
-    int32_t left=raw[2*i]>>16,right=raw[2*i+1]>>16;
-    mono[i]=static_cast<int16_t>(abs(left)>=abs(right)?left:right);
+  uint64_t energy[2]={0,0};
+  for(size_t i=0;i<pairs;i++)for(int ch=0;ch<2;ch++) {
+    int64_t sample=raw[2*i+ch]>>16;energy[ch]+=sample*sample;
   }
-  if (pairs) sendFrame(FRAME_AUDIO_UP,reinterpret_cast<const uint8_t *>(mono),pairs*2);
+  if(microphoneMode)microphoneSlot=microphoneMode-1;
+  else if(captureJustStarted || (!listening && millis()-microphoneSelectedAt>=1000)) {
+    uint8_t other=1-microphoneSlot;
+    if((captureJustStarted && energy[other]>energy[microphoneSlot])
+       || energy[other]>energy[microphoneSlot]*4)microphoneSlot=other;
+    microphoneSelectedAt=millis();
+  }
+  captureJustStarted=false;
+  for (size_t i=0;i<pairs;++i) {
+    // Select one whole channel, never splice two microphones sample by sample.
+    mono[i]=static_cast<int16_t>(raw[2*i+microphoneSlot]>>16);
+  }
+  if (pairs) sendFrame(listening?FRAME_AUDIO_UP:FRAME_WAKE_AUDIO,reinterpret_cast<const uint8_t *>(mono),pairs*2);
 }
 
 static void pollNetwork() {
@@ -673,7 +704,7 @@ void loop() {
   if (!connected && millis()-lastHello>=2000) {
     lastHello=millis();
       char hello[256];
-      snprintf(hello,sizeof(hello),"{\"protocol\":1,\"firmware\":\"voice-device-1.60\",\"display_theme\":%u,\"animation_enabled\":%s,\"boot_animation\":%s,\"pet_action\":%lu,\"pet_frame\":%lu,\"presents\":%lu,\"uptime_ms\":%lu}",
+      snprintf(hello,sizeof(hello),"{\"protocol\":1,\"firmware\":\"voice-device-1.61\",\"wake_protocol\":1,\"display_theme\":%u,\"animation_enabled\":%s,\"boot_animation\":%s,\"pet_action\":%lu,\"pet_frame\":%lu,\"presents\":%lu,\"uptime_ms\":%lu}",
         displayTheme.load(),animationEnabled?"true":"false",pet::bootGreeting?"true":"false",
         (unsigned long)pet::action.load(),(unsigned long)pet::frame.load(),(unsigned long)lcdPresents.load(),(unsigned long)millis());
       sendJson(FRAME_HELLO,hello);
