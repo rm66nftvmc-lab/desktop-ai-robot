@@ -156,8 +156,11 @@ class HermesWorker:
 
     def snapshot(self) -> dict:
         current = self._preferred_session_info()
+        probe = getattr(self.api_client, "health_snapshot", None)
+        health = probe() if callable(probe) else None
         with self._lock:
-            return {"available": bool(self.executable or self.api_client), "pending": self._jobs.qsize(),
+            return {"available": health["available"] if health is not None else bool(self.executable or self.api_client),
+                    "api_health": health, "pending": self._jobs.qsize(),
                     "running": self._current_message_id is not None,
                     "last_error": self._last_error, "session": current,
                     "mode": "runs-api" if self.api_client else "cli",

@@ -288,6 +288,7 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
             "delivery": {"hermes": "connected" if hermes.executable or hermes.api_client else "unavailable",
                          "doubao_web": "not_configured"},
         }
+        result["delivery"]["hermes"] = "connected" if result["hermes"]["available"] else "unavailable"
         result["task"] = runtime.snapshot(result["device"], result["speech"], result["voice"],
                                           [result["hermes"], result["deepseek_harness"]])
         return result

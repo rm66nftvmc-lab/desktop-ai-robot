@@ -2,6 +2,8 @@
 
 import json
 import re
+import threading
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -18,6 +20,24 @@ class HermesRunsClient:
         if self.base_url != "http://127.0.0.1:8642":
             raise ValueError("Hermes Runs API must use the local Gateway listener")
         self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        self._health_lock = threading.Lock()
+        self._health_until = 0.0
+        self._health = {"available": None, "error": None}
+
+    def health_snapshot(self) -> dict:
+        """Bounded, cached read-only probe; never starts or retries a model run."""
+        with self._health_lock:
+            if time.monotonic() < self._health_until:
+                return dict(self._health)
+            self._health_until = time.monotonic() + 5
+        try:
+            self._request("GET", "/v1/capabilities", timeout=.8)
+            health = {"available": True, "error": None}
+        except (OSError, RuntimeError, ValueError) as exc:
+            health = {"available": False, "error": str(exc)}
+        with self._health_lock:
+            self._health = health
+            return dict(health)
 
     def _request(self, method: str, path: str, body: dict | None = None,
                  timeout: float = 10, extra_headers: dict | None = None) -> dict:
@@ -39,7 +59,14 @@ class HermesRunsClient:
             detail = self._error_detail(exc)
             raise RuntimeError(f"Hermes API returned HTTP {exc.code}{detail}") from None
         except (urllib.error.URLError, TimeoutError) as exc:
-            raise RuntimeError(f"Hermes API unavailable: {type(exc).__name__}") from None
+            reason = getattr(exc, "reason", exc)
+            if isinstance(reason, ConnectionRefusedError) or getattr(reason, "errno", None) in {61, 111, 10061}:
+                message = "Hermes 本地 API 未启动（127.0.0.1:8642），请启动 Hermes Gateway 后重试"
+            elif isinstance(reason, TimeoutError):
+                message = "Hermes 本地 API 响应超时，请稍后重试"
+            else:
+                message = "Hermes 本地 API 连接中断，请检查 Gateway 是否运行"
+            raise RuntimeError(message) from None
 
     @staticmethod
     def _error_detail(exc: urllib.error.HTTPError) -> str:

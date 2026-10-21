@@ -180,6 +180,8 @@ Bridge 会把 API 模式下的桌面会话标为“只读”，保留历史查�
 
 如果 Hermes 升级后本地 `127.0.0.1:8642` 没有监听，还需恢复 Gateway 的 API 配置。当前 Hermes 使用按 profile 隔离的 secret scope，仅给启动进程设置环境变量可能无效；需在本机 Hermes 的 `.env` 中配置 `API_SERVER_KEY`（与 Bridge 私有 `hermes-api-key.txt` 一致）、`API_SERVER_HOST=127.0.0.1`、`API_SERVER_PORT=8642`，再启动 Gateway。实际密钥和 `.env` 不进入仓库。
 
+启动脚本现在会调用 `scripts/start_hermes_gateway.ps1`：已有监听时直接复用；未监听且现有本机配置与 Bridge 一致时，隐藏启动 `hermes gateway run`。不会改写密钥、替换已有进程或自动批准启动 hooks。配置缺失/不匹配时只提示，其他智能体可继续使用。Bridge 状态通过带认证的只读 capabilities 请求判断 API 是否可用（0.8 秒超时、5 秒缓存），不再用“程序已安装”代替连接正常；探测不发送模型请求，也不重试失败提问。
+
 ---
 
 ## 6. 手机访问（Tailscale）与安全边界

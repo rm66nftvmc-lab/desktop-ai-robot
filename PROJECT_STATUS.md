@@ -1,6 +1,13 @@
 # Desktop AI Robot project status
 
-Last updated: 2026-10-20
+Last updated: 2026-10-21
+
+## Wake test: Hermes API recovery (2026-10-21)
+
+- User confirms the existing INMP441 L/R is tied to GND. Second microphone remains unconnected; its future L/R selection is 3V3, opposite the first. No wiring or firmware changes in this repair.
+- Live wake count reached 1 and recognition completed, but Hermes delivery failed because the local Gateway was not listening on 127.0.0.1:8642. Existing API configuration/key matched; no secret rewrite was required. Gateway was restored hidden, with authenticated capabilities and an actual short model reply verified. The disposable test session was permanently removed; the failed user recording was not replayed.
+- Bridge now reports cached authenticated API health instead of assuming an installed client is connected. Connection refusal and timeout receive distinct actionable errors. Launcher reuses an existing listener or starts an already configured Gateway without replacing processes, changing keys or approving hooks. Missing optional configuration leaves other agents usable.
+- Validation: 169 backend tests and 19 Node tests passed. Startup helper reused the running Gateway; Bridge restarted and reports API available, USB device connected and wake armed. Full spoken wake-to-answer acceptance remains pending user retry. Wi-Fi diagnostic state remains unchanged.
 
 ## Hermes reply recovery and read-only session visibility (2026-10-20)
 

@@ -75,6 +75,7 @@ if ($bridgeOwner) {
     if ($health.ok -ne $true) { throw 'The listening Bridge failed its health check.' }
     Write-Host "Bridge already listening on http://127.0.0.1:$Port (PID $bridgeOwner)."
     Write-Host 'Use -Restart to reload code, models or the Harness plugin.'
+    & (Join-Path $PSScriptRoot 'start_hermes_gateway.ps1')
     if ($OpenBrowser) { Start-Process "http://127.0.0.1:$Port/" }
     exit 0
 }
@@ -131,6 +132,7 @@ if (-not $plugin) {
 }
 
 $env:ROBOT_DATA_DIR = $dataDir
+& (Join-Path $PSScriptRoot 'start_hermes_gateway.ps1') -DataDir $dataDir
 & $python -c "from bridge.run import rotate_startup_logs; from bridge.app.security import resolve_data_dir; rotate_startup_logs(resolve_data_dir()[0])"
 if ($LASTEXITCODE -ne 0) { throw 'Bridge startup log rotation failed' }
 $stdout = Join-Path $dataDir 'bridge.stdout.log'
