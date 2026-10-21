@@ -10,16 +10,21 @@ import numpy as np
 
 from .tts import selected_voice, synthesize_chunks
 
+CONNECTION_NOTICE = '连接不上，没有大白饭吃，工作不了哟'
+
 
 class WakeAcknowledgement:
-    def __init__(self, data_dir, device, audio_output):
+    def __init__(self, data_dir, device, audio_output, *, text='在呢'):
         self.data_dir, self.device, self.audio_output = data_dir, device, audio_output
+        self.text = text
+        self.short = text == '在呢'
+        self.synthesis_text = text + ('！' if self.short else '。')
         self._voice = None
         self._clips = ()
         self._lock = threading.Lock()
         self._warm_thread = None
         self._stopped = threading.Event()
-        self._status = {'text': '在呢', 'ready': False, 'warming': False}
+        self._status = {'text': text, 'ready': False, 'warming': False}
 
     def snapshot(self):
         return dict(self._status, ready=self._voice == selected_voice(self.data_dir) and bool(self._clips))
@@ -66,7 +71,7 @@ class WakeAcknowledgement:
             voice = selected_voice(self.data_dir)
             if voice == self._voice and self._clips:
                 return True
-            identity = hashlib.sha256(('wake-cue-v3|在呢！|' + voice).encode()).hexdigest()[:24]
+            identity = hashlib.sha256(('wake-cue-v3|' + self.synthesis_text + '|' + voice).encode()).hexdigest()[:24]
             path = self.data_dir / 'cache' / 'wake-cues' / (identity + '.wav')
             try:
                 if path.stat().st_size > 320044:
@@ -74,10 +79,10 @@ class WakeAcknowledgement:
                 clip = self._compact([path.read_bytes()])
             except (OSError, ValueError, wave.Error, EOFError):
                 candidates = []
-                for _ in range(3):
+                for _ in range(3 if self.short else 1):
                     if cancelled() or self._stopped.is_set():
                         return False
-                    generated = self._compact(tuple(synthesize_chunks('在呢！', self.data_dir, cancelled=cancelled)))
+                    generated = self._compact(tuple(synthesize_chunks(self.synthesis_text, self.data_dir, cancelled=cancelled)))
                     duration, gap = self._rhythm(generated)
                     candidates.append((duration + gap*4, generated))
                     if duration <= 1.05 and gap <= .08:
@@ -158,3 +163,31 @@ class WakeAcknowledgement:
             time.sleep(.05)
         self.device.stop_playback(expected_generation=generation)
         raise RuntimeError('Wake acknowledgement playback timed out')
+
+
+class WakeConnectionGate:
+    """Speak a local notice without opening capture or submitting any AI prompt."""
+    def __init__(self, normal, failure, check):
+        self.normal, self.failure, self.check = normal, failure, check
+        self.blocked_reason = None
+
+    def __call__(self, cancelled):
+        self.blocked_reason = self.check()
+        if cancelled():
+            return False
+        if self.blocked_reason:
+            self.failure(cancelled)
+            return False
+        return self.normal(cancelled)
+
+    def snapshot(self):
+        return dict(self.normal.snapshot(), failure_text=self.failure.text,
+                    failure_ready=self.failure.snapshot()['ready'], blocked_reason=self.blocked_reason)
+
+    def warm(self):
+        self.normal.warm()
+        self.failure.warm()
+
+    def stop(self):
+        self.normal.stop()
+        self.failure.stop()

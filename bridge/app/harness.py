@@ -88,6 +88,43 @@ class HarnessClient:
         self._process = None
         self._lock = RLock()
         self._opener = None
+        self._health_opener = None
+        self._health_lock = threading.Lock()
+        self._health_until = 0.
+        self._health = {'available': False, 'error': None}
+
+    def health_snapshot(self):
+        """Bounded read-only probe; never starts a Host or submits model work."""
+        with self._health_lock:
+            if time.monotonic() < self._health_until:
+                return dict(self._health)
+            self._health_until = time.monotonic()+2
+        try:
+            if self._health_opener is None:
+                log = (self.data_dir/'harness-bridge.log').read_text(encoding='utf-8', errors='replace')
+                tokens = re.findall(r'http://127\.0\.0\.1:3081/\?token=([^\s]+)', log)
+                if not tokens:
+                    raise RuntimeError('Host not ready')
+                opener = urllib.request.build_opener(urllib.request.ProxyHandler({}),
+                    urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+                with opener.open(BASE+'/?token='+tokens[-1], timeout=.4) as response:
+                    response.read(1)
+                self._health_opener = opener
+            body = {'type': 'client-request', 'rpcId': str(uuid.uuid4()),
+                    'method': 'session/list', 'payload': {'args': {'_request': {}}}}
+            request = urllib.request.Request(BASE+'/api/session/list', data=json.dumps(body).encode(),
+                headers={'Content-Type': 'application/json', 'Origin': BASE})
+            with self._health_opener.open(request, timeout=.4) as response:
+                result = json.load(response)['result']
+            if not result.get('ok'):
+                raise RuntimeError('Host API not ready')
+            health = {'available': True, 'error': None}
+        except (OSError, RuntimeError, ValueError, KeyError):
+            self._health_opener = None
+            health = {'available': False, 'error': 'DeepSeek Harness 本地 API 未连接'}
+        with self._health_lock:
+            self._health = health
+            return dict(health)
 
     @property
     def installed(self):
@@ -325,6 +362,8 @@ class HarnessWorker(HermesWorker):
         return result
 
     def _ask(self, text, session):
+        if not self.authorize_job(self._current_message_id):
+            raise RuntimeError('访问授权已失效，请重新登录 Bridge')
         if session:
             state = self.client.rpc('session/projections', {'sessionId': session})
             baseline = state['asOfSeq']
@@ -353,6 +392,8 @@ class HarnessWorker(HermesWorker):
             while time.monotonic() < deadline:
                 with self._lock:
                     cancelled = self._stop.is_set() or message_id in self._cancelled
+                if not self.authorize_job(message_id):
+                    cancelled = True
                 state = self.client.rpc('session/projections', {'sessionId': session})
                 page = self.client.rpc('session/page', {
                     'address': {'kind': 'session', 'sessionId': session},

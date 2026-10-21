@@ -90,7 +90,7 @@ def test_typed_reply_never_auto_plays_or_replaces_a_voice_turn(tmp_path, source)
     client.post('/api/login', json={'token': 'test-access-token-for-bridge'})
     session = client.post('/api/sessions', json={'source': source}).json()['item']['id']
     voice = app.state.voice
-    voice.set_target(source, session)
+    assert client.post('/api/voice/target', json={'source': source, 'session_id': session}).status_code == 200
     voice.on_listen_start(1)
     voice.on_transcript('语音提问', 1)
     spoken_id = voice.snapshot()['message_id']

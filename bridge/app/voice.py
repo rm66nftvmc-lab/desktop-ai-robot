@@ -15,13 +15,15 @@ from .tts import SynthesisCancelled, synthesize_chunks
 
 class VoiceConversation:
     def __init__(self, database: Path, data_dir: Path, device, hermes, *, audio_output=None,
-                 workers=None, validate_target=None):
+                 workers=None, validate_target=None, access_grant=lambda: True, bind_access=None):
         self.database = database
         self.data_dir = data_dir
         self.device = device
         self.hermes = hermes
         self.workers = workers or {"hermes": hermes}
         self.validate_target = validate_target
+        self.access_grant, self.bind_access = access_grant, bind_access
+        self._capture_grant = self._message_grant = None
         self._require_session = workers is not None
         self._target_lock = threading.Lock()
         self._selected_target = {"source": "hermes", "session_id": None}
@@ -64,6 +66,7 @@ class VoiceConversation:
             target = dict(self._selected_target)
         with self._lock:
             return {"state": self._state, "last_error": self._last_error,
+                    "authorized": bool(self.access_grant()),
                     "capture_generation": self._capture_generation,
                     "message_id": self._message_id, "target": target,
                     "capture_target": dict(self._capture_target)}
@@ -108,11 +111,19 @@ class VoiceConversation:
             self._last_error = '已停止接收本轮语音回复；AI 取消结果请看当前会话状态'
         self.device.set_face(faces.READY)
 
+    def on_authorization_lost(self):
+        with self._lock:
+            self._capture_grant = self._message_grant = None
+            self._message_id = None
+            self._output_generation += 1
+            self._state, self._last_error = 'idle', '语音未授权，请先输入访问密钥登录 Bridge 并选择会话'
+
     def on_listen_start(self, capture_generation: int) -> None:
         # Never call a network API on the serial receive thread. Selection was
         # validated by the web endpoint; snapshot it before recording begins.
         with self._target_lock:
             target = dict(self._selected_target)
+        grant = self.access_grant()
         worker = self.workers.get(target["source"])
         pending = worker.pending_approval() if worker and hasattr(worker, "pending_approval") else None
         if pending and self._require_session:
@@ -124,6 +135,7 @@ class VoiceConversation:
             old_message_id = None if same_approval else self._message_id
             old_worker = self.workers.get(self._message_source)
             self._capture_generation = capture_generation
+            self._capture_grant = grant
             self._capture_target = target
             self._approval_target = pending
             self._approval_worker = worker
@@ -133,6 +145,8 @@ class VoiceConversation:
             else:
                 self._message_id = pending.get("message_id", self._message_id)
                 self._message_source = target["source"]
+                if self._message_grant is None:
+                    self._message_grant = grant
             self._state = "listening_for_approval" if pending else "listening"
             self._last_error = None
         if old_message_id is not None:
@@ -141,6 +155,9 @@ class VoiceConversation:
                 cancel(old_message_id)
 
     def on_transcript(self, text: str, capture_generation: int) -> None:
+        if not self.capture_authorized(capture_generation):
+            self.on_speech_error('请先输入访问密钥登录 Bridge 并选择会话，再使用机器人语音', capture_generation)
+            return
         with self._lock:
             if capture_generation != self._capture_generation:
                 return
@@ -198,6 +215,9 @@ class VoiceConversation:
                 return
             self._message_id = item["id"]
             self._message_source = target["source"]
+            self._message_grant = self._capture_grant
+            if self.bind_access:
+                self.bind_access(item['id'], self._message_grant)
         try:
             accepted = worker.enqueue(item["id"], text.strip())
         except Exception as exc:
@@ -227,7 +247,8 @@ class VoiceConversation:
                 return
         # Keep the original input route even if a typed request is later
         # approved by voice. Only microphone questions auto-play their answer.
-        voice_input = self._is_voice_input(message_id, source)
+        voice_input = self._is_voice_input(message_id, source) and bool(self._message_grant) and (
+            self.access_grant() == self._message_grant)
         with self._lock:
             if message_id != self._message_id or source != self._message_source:
                 return
@@ -251,6 +272,11 @@ class VoiceConversation:
                 "SELECT 1 FROM messages WHERE id=? AND source=? AND role='user' AND input_method='voice'",
                 (message_id, source)).fetchone() is not None
 
+    def capture_authorized(self, generation):
+        with self._lock:
+            return (generation == self._capture_generation and bool(self._capture_grant)
+                    and self.access_grant() == self._capture_grant)
+
     def on_hermes_error(self, message_id: int, error: str) -> None:
         self.on_agent_error(message_id, error, source="hermes")
 
@@ -270,7 +296,8 @@ class VoiceConversation:
             output_generation = self._output_generation
         description = pending.get("description", "")[:100]
         self.device.set_face(faces.APPROVE)
-        if not self.audio_output.enabled or not self._is_voice_input(message_id, "hermes"):
+        if (not self.audio_output.enabled or not self._is_voice_input(message_id, "hermes")
+                or not self._message_grant or self.access_grant() != self._message_grant):
             return
         prompt = (f"Hermes 请求审批：{description}。请先在网页核对具体命令。"
                   "确认后按键说同意审批；不同意就说拒绝审批。")
@@ -291,6 +318,7 @@ class VoiceConversation:
         with self._lock:
             return (self._message_id == message_id
                     and self._output_generation == output_generation
+                    and bool(self._message_grant) and self.access_grant() == self._message_grant
                     and self.audio_output.enabled)
 
     def _run(self) -> None:

@@ -2,6 +2,16 @@
 
 Last updated: 2026-10-21
 
+## Connection notice and voice authorization (2026-10-21)
+
+- User requests the exact spoken notice “连接不上，没有大白饭吃，工作不了哟” for connection problems and explicitly requires that agents cannot be invoked without the access key. Existing web routes already required authenticated sessions; the separate hardware voice route previously did not require a web authorization grant. That gap is now closed.
+- Successful authenticated selection/sync of the web AI target grants hardware voice access. Ordinary diagnostic login/status requests do not grant microphone access. Grants are memory-only, expire with the associated browser sessions and are lost on Bridge restart. All voice-authorized browsers must be logged out/expired to revoke shared hardware access; just closing a tab is not logout.
+- Microphone input is checked before ASR/approval/submission; queued text requests bind to their own browser session, queued voice to their original grant. Workers recheck immediately before model dispatch; logout/expiry cancels pending/running work and CLI checks every 0.5 seconds. Local stop/cleanup requests can continue for already-sent runs; remote instantaneous cancellation is not guaranteed. New login cannot revive a revoked old voice request.
+- Wake connection gate checks authorization before probing agents. Missing authorization/target or unavailable selected local API plays the cached notice, returns to armed and never starts capture or prompts an agent. Both cues retain current voice/mute. Paimon notice generated locally, ~6.495 seconds; this fixed audio is private, no user background audio stored.
+- Bounded Harness read-only health uses an independent cookie jar, 0.4-second login/read timeouts and 2-second cache; never starts a Host or sends prompts. Existing Hermes authenticated capabilities health retained. Model-provider internet failures after local preflight remain possible.
+- Validation: 205 backend tests passed. Live unauthenticated Hermes and Harness POSTs returned 401; authorized disposable Hermes text test completed and only its own session was removed. Diagnostic login still left voice_authorized=false. Both local API health checks succeeded. Bridge restarted with cached normal/failure cues ready; human notice audition requested, pending.
+- Fully stopped Bridge/PC or disconnected robot cannot detect the wake phrase with the present PC-hosted recognizer. MCU offline wake remains unimplemented; no new firmware, wiring or display changes in this task.
+
 ## Wake cue rhythm replacement (2026-10-21)
 
 - User reports “在呢” sounds unnatural with an internal pause. Inspection found the v2 cached Paimon clip lasts ~1.329 seconds with a pronounced inter-syllable energy dip. The cue was already one continuous WAV; the transport was not proven to be the cause of that perceived pause.

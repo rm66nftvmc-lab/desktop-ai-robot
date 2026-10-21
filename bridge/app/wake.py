@@ -268,6 +268,9 @@ class WakeWorker:
             self._epoch += 1
             if not ready:
                 self._state = 'armed'
+                reason = getattr(self.acknowledge, 'blocked_reason', None)
+                if reason:
+                    self._error = reason
                 self._cooldown = time.monotonic() + .8
                 return
             self._state = 'waking'

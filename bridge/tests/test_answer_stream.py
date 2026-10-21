@@ -94,11 +94,12 @@ def test_stop_api_cannot_cancel_a_different_conversation_or_agent(tmp_path):
     db = tmp_path/'messages.sqlite3'
     mid = add_message(db, 'hermes', 'hello', conversation_id='one', delivery='queued')['id']
     app.state.hermes.api_client = object()
-    app.state.hermes.enqueue(mid, 'hello')
     client = TestClient(app, base_url='http://127.0.0.1')
     body = {'source': 'hermes', 'session_id':'one', 'message_id':mid}
     assert client.post('/api/messages/stop', json=body).status_code == 401
     client.post('/api/login', json={'token':'test-access-token'})
+    app.state.message_access.browser(mid, client.cookies.get('robot_session'))
+    assert app.state.hermes.enqueue(mid, 'hello')
     assert client.post('/api/messages/stop', json={**body,'session_id':'two'}).status_code == 404
     assert client.post('/api/messages/stop', json={**body,'source':'deepseek_harness'}).status_code == 404
     assert client.post('/api/messages/stop', json=body, headers={'origin':'https://bad.test'}).status_code == 403

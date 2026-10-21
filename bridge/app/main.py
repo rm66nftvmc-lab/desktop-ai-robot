@@ -27,7 +27,8 @@ from .security import (SESSION_SECONDS, Sessions, anchor_path, load_or_create_to
                        record_or_verify_data_dir, resolve_data_dir)
 from .speech import SpeechWorker
 from .wake import WakeWorker
-from .wake_ack import WakeAcknowledgement
+from .wake_ack import WakeAcknowledgement, WakeConnectionGate, CONNECTION_NOTICE
+from .message_access import MessageAccess
 from .microphone import SpeechActivity
 from .storage import add_message, initialize, list_messages, set_delivery, get_setting, set_setting
 from .tts import (SynthesisCancelled, selected_voice, set_selected_voice, remember_voice, synthesize_chunks,
@@ -131,6 +132,7 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
         database_check["state"] = "ok"
     maintenance = MaintenanceStatus(data_dir, database_check)
     sessions = Sessions(token or load_or_create_token(data_dir))
+    message_access = MessageAccess(sessions)
     speech = SpeechWorker(data_dir / "models")
     api_key_file = data_dir / "hermes-api-key.txt"
     api_client = HermesRunsClient(api_key_file) if api_key_file.is_file() else None
@@ -139,7 +141,13 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
     conversations = Conversations(database, hermes, harness)
     audio_output = AudioOutput(data_dir)
     network = NetworkDevices(data_dir)
-    device = DeviceLink(speech.enqueue, lambda generation: voice.on_listen_start(generation),
+    def submit_recording(wav, generation):
+        if voice.capture_authorized(generation):
+            speech.enqueue(wav, generation)
+        else:
+            voice.on_speech_error('请先输入访问密钥登录 Bridge 并选择会话', generation)
+
+    device = DeviceLink(submit_recording, lambda generation: voice.on_listen_start(generation),
                         audio_output=audio_output,
                         on_disconnect=lambda: (voice.on_device_disconnect(), wake.disconnected()), network=network,
                         on_mic_audio=lambda pcm, capture, generation: wake.feed(pcm, capture, generation),
@@ -155,10 +163,31 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
     theme_voice_lock = threading.Lock()
     voice = VoiceConversation(database, data_dir, device, hermes, audio_output=audio_output,
                               workers={"hermes": hermes, "deepseek_harness": harness},
-                              validate_target=conversations.resolve_writable)
+                              validate_target=conversations.resolve_writable,
+                              access_grant=sessions.voice_grant, bind_access=message_access.voice)
+    for worker in (hermes, harness):
+        worker.authorize_job = message_access.allowed
+        worker.release_authorization = message_access.release
     speech.on_transcript = voice.on_transcript
     speech.on_error = voice.on_speech_error
-    wake_ack = WakeAcknowledgement(data_dir, device, audio_output)
+    def wake_connection_error():
+        # Authorization comes first: an unpaired robot must not query an agent.
+        if not sessions.voice_grant():
+            return '请先输入访问密钥登录 Bridge 并选择会话'
+        target = voice.snapshot()['target']
+        worker = {'hermes': hermes, 'deepseek_harness': harness}.get(target['source'])
+        if worker is None or not target['session_id']:
+            return '请先在 Bridge 选择智能体和会话'
+        client = getattr(worker, 'api_client', None) if target['source'] == 'hermes' else getattr(worker, 'client', None)
+        probe = getattr(client, 'health_snapshot', None)
+        if client is None and not getattr(worker, 'executable', None):
+            return '当前智能体未安装或未连接'
+        if callable(probe) and probe().get('available') is not True:
+            return '当前智能体的本地 API 未连接'
+        return None
+
+    wake_ack = WakeConnectionGate(WakeAcknowledgement(data_dir, device, audio_output),
+        WakeAcknowledgement(data_dir, device, audio_output, text=CONNECTION_NOTICE), wake_connection_error)
     wake = WakeWorker(database, data_dir, device, voice_busy=lambda:
                       speech.snapshot()['state'] in ('queued', 'transcribing') or voice.snapshot()['state'] in (
                           'listening', 'listening_for_approval', 'sending', 'waiting_for_hermes', 'waiting_for_agent',
@@ -214,6 +243,8 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
     app.state.voice = voice
     app.state.audio_output = audio_output
     app.state.wake = wake
+    app.state.sessions = sessions
+    app.state.message_access = message_access
     allowed_hosts = ["127.0.0.1", "localhost"]
     tailnet_host = os.environ.get("ROBOT_TAILNET_HOST", "").strip().lower()
     if tailnet_host:
@@ -271,6 +302,14 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
     def logout(request: Request, response: Response) -> dict:
         check_origin(request)
         sessions.logout(request.cookies.get("robot_session"))
+        for message_id in message_access.revoked():
+            for worker in (hermes, harness):
+                cancel = getattr(worker, 'cancel', None)
+                if callable(cancel):
+                    cancel(message_id)
+        if not sessions.voice_grant():
+            voice.on_authorization_lost()
+            device.stop_playback()
         response.delete_cookie("robot_session", samesite="strict")
         return {"ok": True}
 
@@ -318,7 +357,9 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
             except (OSError, RuntimeError) as exc:
                 voice.set_target(body.source, None)
                 raise HTTPException(status_code=503, detail=str(exc)) from exc
-        return voice.set_target(body.source, body.session_id)
+        result = voice.set_target(body.source, body.session_id)
+        sessions.authorize_voice(request.cookies.get('robot_session'))
+        return result
 
     @app.post('/api/voice/wake', dependencies=[Depends(require_session)])
     def configure_wake(body: WakeBody, request: Request) -> dict:
@@ -563,16 +604,20 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
                 raise HTTPException(status_code=503, detail=str(exc)) from exc
         if body.source == "hermes":
             item = add_message(database, body.source, text, delivery="queued", conversation_id=body.session_id)
+            message_access.browser(item['id'], request.cookies.get('robot_session'))
             if hermes.enqueue(item["id"], text, new_session=body.new_session):
                 return {"item": item, "delivery": "queued"}
             set_delivery(database, item["id"], "failed")
+            message_access.release(item['id'])
             item["delivery"] = "failed"
             return {"item": item, "delivery": "failed"}
         if body.source == "deepseek_harness":
             item = add_message(database, body.source, text, delivery="queued", conversation_id=body.session_id)
+            message_access.browser(item['id'], request.cookies.get('robot_session'))
             if harness.enqueue(item["id"], text, new_session=body.new_session):
                 return {"item": item, "delivery": "queued"}
             set_delivery(database, item["id"], "failed")
+            message_access.release(item['id'])
             item["delivery"] = "failed"
             return {"item": item, "delivery": "failed"}
         item = add_message(database, body.source, text)

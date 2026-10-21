@@ -121,6 +121,26 @@ class Sessions:
         self._expires: dict[str, float] = {}
         self._failed: dict[str, tuple[int, float]] = {}
         self._lock = threading.Lock()
+        self._voice_sessions: set[str] = set()
+        self._voice_grant: str | None = None
+
+    def voice_grant(self) -> str | None:
+        with self._lock:
+            self._voice_sessions = {key for key in self._voice_sessions
+                                    if self._expires.get(key, 0) > time.time()}
+            if not self._voice_sessions:
+                self._voice_grant = None
+            return self._voice_grant
+
+    def authorize_voice(self, session: str | None) -> bool:
+        with self._lock:
+            if not session or self._expires.get(session, 0) <= time.time():
+                return False
+            active = {key for key in self._voice_sessions if self._expires.get(key, 0) > time.time()}
+            if not active:
+                self._voice_grant = secrets.token_urlsafe(24)
+            self._voice_sessions = active | {session}
+            return True
 
     def login(self, presented: str, client_id: str = "local") -> str | None:
         with self._lock:
@@ -152,3 +172,4 @@ class Sessions:
         if session:
             with self._lock:
                 self._expires.pop(session, None)
+                self._voice_sessions.discard(session)

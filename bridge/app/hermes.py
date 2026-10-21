@@ -119,6 +119,8 @@ class HermesWorker:
         self.on_error = on_error
         self.on_approval = on_approval
         self.api_client = api_client
+        self.authorize_job = lambda message_id: True
+        self.release_authorization = lambda message_id: None
         self._jobs: queue.Queue[tuple[int, str, str | None] | None] = queue.Queue(maxsize=8)
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
@@ -208,6 +210,8 @@ class HermesWorker:
             if not pending or pending["request_id"] != request_id or not self.api_client:
                 return False
             run_id = pending["run_id"]
+        if not self.authorize_job(pending['message_id']):
+            raise RuntimeError('访问授权已失效，请重新登录 Bridge')
         self.api_client.approve(run_id, request_id, choice)
         with self._lock:
             if self._pending_approval and self._pending_approval["request_id"] == request_id:
@@ -215,6 +219,8 @@ class HermesWorker:
         return True
 
     def enqueue(self, message_id: int, text: str, *, new_session: bool = False) -> bool:
+        if not self.authorize_job(message_id):
+            return False
         if not (self.executable or self.api_client) or self._stop.is_set():
             return False
         preferred = None if new_session else self._preferred_session_info()
@@ -290,6 +296,8 @@ class HermesWorker:
         return True
 
     def _ask(self, text: str, session: str | None) -> str:
+        if not self.authorize_job(self._current_message_id):
+            raise RuntimeError('访问授权已失效，请重新登录 Bridge')
         if self.api_client:
             return self._ask_api(text, session)
         command = [self.executable, "chat", "--query-file", "-", "--oneshot", "-Q",
@@ -308,11 +316,22 @@ class HermesWorker:
         if cancelled:
             process.terminate()
         try:
-            stdout, _stderr = process.communicate(input=text, timeout=135)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.communicate()
-            raise RuntimeError("Hermes timed out") from None
+            deadline = time.monotonic()+135
+            first = True
+            while True:
+                if not self.authorize_job(self._current_message_id):
+                    process.kill()
+                    process.communicate()
+                    raise RuntimeError('访问授权已失效，已停止本轮 Hermes 进程')
+                try:
+                    stdout, _stderr = process.communicate(input=text if first else None, timeout=.5)
+                    break
+                except subprocess.TimeoutExpired:
+                    first = False
+                    if time.monotonic() >= deadline:
+                        process.kill()
+                        process.communicate()
+                        raise RuntimeError('Hermes timed out') from None
         finally:
             with self._lock:
                 self._process = None
@@ -341,6 +360,8 @@ class HermesWorker:
             while time.monotonic() < deadline:
                 with self._lock:
                     cancelled = self._stop.is_set() or message_id in self._cancelled
+                if not self.authorize_job(message_id):
+                    cancelled = True
                 if cancelled and not stop_sent:
                     self.api_client.stop(run_id)
                     stop_sent = True
@@ -414,11 +435,14 @@ class HermesWorker:
                 with self._lock:
                     self._current_message_id = None
                     self._cancelled.discard(message_id)
+                self.release_authorization(message_id)
                 continue
             set_delivery(self.database, message_id, "running")
             conversation = None
             self._last_run_session = None
             try:
+                if not self.authorize_job(message_id):
+                    raise RuntimeError('访问授权已失效，请重新登录 Bridge')
                 session, conversation = message_route(self.database, message_id, session)
                 self._check_api_target(session)
                 answer = self._ask(text, session)
@@ -463,6 +487,7 @@ class HermesWorker:
                         with self._lock:
                             self._last_error = f"Voice callback: {exc}"
             finally:
+                self.release_authorization(message_id)
                 bind_draft(self.database, conversation, self._last_run_session)
                 with self._lock:
                     self._current_message_id = None

@@ -6,6 +6,32 @@ from bridge.app.harness import HarnessClient, HarnessWorker, backend_overlay, co
 from bridge.app.storage import initialize
 
 
+def test_health_probe_is_bounded_read_only_and_never_starts_host(tmp_path, monkeypatch):
+    import io
+    import json
+    client = HarnessClient(tmp_path)
+    calls = []
+    class Opener:
+        def open(self, request, timeout):
+            calls.append((request.full_url, timeout, json.loads(request.data)))
+            return io.BytesIO(json.dumps({'result': {'ok': True, 'value': {'items': []}}}).encode())
+    client._health_opener = Opener()
+    monkeypatch.setattr(client, 'start', lambda: pytest.fail('Health must not start a Host'))
+    assert client.health_snapshot()['available']
+    assert client.health_snapshot()['available']
+    assert len(calls) == 1
+    assert calls[0][0].endswith('/api/session/list') and calls[0][1] == .4
+    assert calls[0][2]['method'] == 'session/list'
+
+
+def test_health_failure_is_sanitized_and_does_not_use_model_rpc(tmp_path, monkeypatch):
+    client = HarnessClient(tmp_path)
+    monkeypatch.setattr(client, 'rpc', lambda *a: pytest.fail('No model RPC allowed'))
+    result = client.health_snapshot()
+    assert not result['available']
+    assert str(tmp_path) not in result['error']
+
+
 def test_expired_harness_cookie_refreshes_once_without_retrying_ambiguous_writes(tmp_path, monkeypatch):
     client = HarnessClient(tmp_path)
     expired = _RouteOpener([urllib.error.HTTPError('http://local/api/test', 401, 'expired', {}, None)])
