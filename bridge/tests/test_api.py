@@ -80,6 +80,31 @@ def test_six_digit_key_and_login_attempt_limit(tmp_path):
     assert fresh_client.post("/api/login", json={"token": "654321"}).status_code == 200
 
 
+@pytest.mark.parametrize('source', ['hermes', 'deepseek_harness'])
+def test_typed_reply_never_auto_plays_or_replaces_a_voice_turn(tmp_path, source):
+    hermes, harness = FakeHermes(), FakeHermes()
+    app = create_app(tmp_path, token='test-access-token-for-bridge',
+                     hermes_worker=hermes, harness_worker=harness)
+    client = TestClient(app, base_url='http://127.0.0.1', headers={
+        'user-agent': 'Mozilla/5.0 (Linux; Android 14) Mobile'})
+    client.post('/api/login', json={'token': 'test-access-token-for-bridge'})
+    session = client.post('/api/sessions', json={'source': source}).json()['item']['id']
+    voice = app.state.voice
+    voice.set_target(source, session)
+    voice.on_listen_start(1)
+    voice.on_transcript('语音提问', 1)
+    spoken_id = voice.snapshot()['message_id']
+    result = client.post('/api/messages', json={
+        'source': source, 'session_id': session, 'text': '手机打字提问'}).json()
+    assert result['item']['input_method'] == 'text'
+    worker = hermes if source == 'hermes' else harness
+    worker.on_reply(result['item']['id'], '打字问题的回答')
+    assert voice._jobs.empty()
+    assert voice.snapshot()['message_id'] == spoken_id
+    worker.on_reply(spoken_id, '语音问题的回答')
+    assert voice._jobs.get_nowait()[1:3] == ('语音问题的回答', 'reply')
+
+
 def test_cross_origin_submission_is_rejected(tmp_path):
     client = TestClient(create_app(tmp_path, token="test-access-token-for-bridge"), base_url="http://127.0.0.1")
     result = client.post(

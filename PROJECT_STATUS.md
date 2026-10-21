@@ -2,6 +2,12 @@
 
 Last updated: 2026-10-21
 
+## Reply playback follows original input (2026-10-21)
+
+- User requests automatic robot playback for both button and wake-word microphone questions; mobile typed questions receive text replies only. Both microphone paths already share the voice input route, and web submissions retain the text route on both mobile and desktop.
+- Hardened final reply playback against a typed request becoming the active voice turn through spoken approval: the original stored input method and agent must qualify before automatic synthesis. Text approval prompts also remain silent. Manual message playback, global mute, volume, voices and firmware remain unchanged.
+- Validation: 173 backend tests passed, including mobile text interleaved with a voice turn for Hermes and Harness, plus spoken approval preserving text/voice playback policy. No live AI messages or unsolicited speaker playback needed for this change; physical automatic playback acceptance remains with the user.
+
 ## Wake test: Hermes API recovery (2026-10-21)
 
 - User confirms the existing INMP441 L/R is tied to GND. Second microphone remains unconnected; its future L/R selection is 3V3, opposite the first. No wiring or firmware changes in this repair.

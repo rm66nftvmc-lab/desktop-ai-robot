@@ -1,5 +1,6 @@
 import time
 import threading
+import pytest
 
 from bridge.app import faces
 from bridge.app.device import DeviceLink
@@ -58,6 +59,30 @@ class FakeDevice:
 
     def finish_playback(self, generation):
         pass
+
+
+@pytest.mark.parametrize('input_method', ['text', 'voice'])
+def test_spoken_approval_preserves_original_reply_playback_policy(tmp_path, input_method):
+    database = tmp_path / 'messages.sqlite3'
+    initialize(database)
+    hermes, device = FakeHermes(), FakeDevice()
+    voice = VoiceConversation(database, tmp_path, device, hermes,
+                              workers={'hermes': hermes})
+    item = add_message(database, 'hermes', '检查文件', input_method=input_method,
+                       conversation_id='session-one')
+    hermes.approval = {'request_id': 'approval-one', 'message_id': item['id'],
+                       'conversation_id': 'session-one'}
+    voice.set_target('hermes', 'session-one')
+    voice.on_listen_start(1)
+    voice.on_transcript('同意审批', 1)
+    assert hermes.decisions == [('approval-one', 'once')]
+    voice.on_reply(item['id'], '检查完成')
+    if input_method == 'voice':
+        assert voice._jobs.get_nowait()[1:3] == ('检查完成', 'reply')
+        assert voice.snapshot()['state'] == 'queued_to_speak'
+    else:
+        assert voice._jobs.empty()
+        assert voice.snapshot()['state'] == 'text_only'
 
 
 def test_empty_transcript_returns_screen_to_ready_instead_of_thinking(tmp_path):

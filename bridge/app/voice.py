@@ -3,6 +3,7 @@
 import queue
 import json
 import re
+import sqlite3
 import threading
 from pathlib import Path
 
@@ -224,9 +225,15 @@ class VoiceConversation:
         with self._lock:
             if message_id != self._message_id or source != self._message_source:
                 return
-            self._state = "queued_to_speak" if self.audio_output.enabled else "text_only"
+        # Keep the original input route even if a typed request is later
+        # approved by voice. Only microphone questions auto-play their answer.
+        voice_input = self._is_voice_input(message_id, source)
+        with self._lock:
+            if message_id != self._message_id or source != self._message_source:
+                return
+            enabled = voice_input and self.audio_output.enabled
+            self._state = "queued_to_speak" if enabled else "text_only"
             output_generation = self._output_generation
-            enabled = self.audio_output.enabled
         if not enabled:
             self.device.set_face(faces.READY)
             return
@@ -237,6 +244,12 @@ class VoiceConversation:
                 if message_id == self._message_id:
                     self._state = "error"
                     self._last_error = "语音播报队列已满"
+
+    def _is_voice_input(self, message_id: int, source: str) -> bool:
+        with sqlite3.connect(self.database) as db:
+            return db.execute(
+                "SELECT 1 FROM messages WHERE id=? AND source=? AND role='user' AND input_method='voice'",
+                (message_id, source)).fetchone() is not None
 
     def on_hermes_error(self, message_id: int, error: str) -> None:
         self.on_agent_error(message_id, error, source="hermes")
@@ -257,7 +270,7 @@ class VoiceConversation:
             output_generation = self._output_generation
         description = pending.get("description", "")[:100]
         self.device.set_face(faces.APPROVE)
-        if not self.audio_output.enabled:
+        if not self.audio_output.enabled or not self._is_voice_input(message_id, "hermes"):
             return
         prompt = (f"Hermes 请求审批：{description}。请先在网页核对具体命令。"
                   "确认后按键说同意审批；不同意就说拒绝审批。")
