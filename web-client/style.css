@@ -191,9 +191,9 @@ p { margin: 0; }
 @media (prefers-reduced-motion: reduce) {
   .sidebar { transition: none; }
 }
-.device-audio-group { min-width: 0; max-width: min(60vw, 280px); flex: 0 1 auto; position: relative; }
-.device-status-row { display: flex; align-items: center; gap: 8px; }
-.device-status-row .device-pill { min-width: 0; max-width: calc(100% - 126px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.device-audio-group { min-width: 0; flex: none; position: relative; margin-right: 10px; }
+.device-status-row { display: flex; align-items: center; gap: 10px; }
+.device-status-row .device-pill { flex: none; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .audio-icon-button { flex: none; display: inline-grid; place-items: center; width: 34px; height: 34px; padding: 7px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-soft); color: #b9c9da; }
 .audio-icon-button svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .audio-icon-button:hover, .audio-icon-button[aria-expanded="true"] { color: #d8eaff; background: #23384c; border-color: #77b6ff; }
@@ -252,14 +252,16 @@ p { margin: 0; }
 .composer-actions { justify-content: flex-end; }
 .chat-heading h2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 760px) {
-  .device-audio-group { max-width: 56vw; }
+  .chat-header { flex-wrap: wrap; }
+  .chat-target-heading { order: 1; flex: 1 1 0; }
+  .chat-header > .logout-button { order: 2; }
+  .device-audio-group { order: 3; flex: 0 0 100%; margin-right: 0; padding-top: 4px; }
   .device-status-row { justify-content: flex-end; }
 }
 @media (max-width: 520px) {
-  .device-audio-group { max-width: 56vw; }
-  .device-status-row { gap: 5px; }
-  .device-status-row .audio-icon-button { width: 30px; height: 30px; padding: 6px; }
-  .device-status-row .device-pill { max-width: calc(100% - 105px); padding: 4px 6px; font-size: .6rem; }
+  .device-status-row { gap: 10px; }
+  .device-status-row .audio-icon-button { width: 40px; height: 40px; padding: 9px; }
+  .device-status-row .device-pill { max-width: calc(100% - 100px); padding: 6px 10px; font-size: .72rem; }
   .chat-target-heading .brand-mark.small { width: 30px; height: 30px; border-radius: 9px; font-size: 1rem; }
 }
 
