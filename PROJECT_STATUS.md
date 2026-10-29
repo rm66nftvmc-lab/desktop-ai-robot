@@ -4,9 +4,9 @@ Last updated: 2026-10-29
 
 ## Physical button opens Bridge in Edge (2026-10-29)
 
-- Firmware 1.63 distinguishes a debounced short release from a 1.2-second hold. Short press retains start/stop recording; holding sends one OPEN_BRIDGE event, and releasing after a hold never starts a recording. Existing capture-control acknowledgements are unchanged.
+- Firmware 1.64 distinguishes a debounced short release from a 3-second hold (increased from 1.2 seconds at the user’s request). Short press retains start/stop recording; holding sends one OPEN_BRIDGE event, and releasing after a hold never starts a recording. Existing capture-control acknowledgements are unchanged.
 - Bridge handles the event only after a device handshake, launches Microsoft Edge explicitly and suppresses repeated opens within three seconds. Opening the page never grants agent/voice authorization. Bridge must already be running on the computer; powering the robot alone cannot launch a stopped PC-side service.
-- Validation: firmware build successful; 208 backend and 21 frontend tests passed. Backed up full 16 MB flash privately, wrote 868,352 changed bytes, and verified the full 15,923,888-byte application digest. Bridge restored: COM9, firmware 1.63, connected, CRC errors 0, DSH Pet retained. Physical long/short press acceptance requested, pending.
+- Validation: firmware build successful; 208 backend and 21 frontend tests passed for 1.63. Backed up full 16 MB flash privately, wrote 868,352 changed bytes, and verified the full 15,923,888-byte application digest. Bridge restored: COM9, firmware 1.63, connected, CRC errors 0, DSH Pet retained. User confirmed the 1.63 hold did not trigger recording. The requested 3-second adjustment in 1.64 compiled successfully, wrote 16,384 changed bytes, passed the full application digest verification and all three browser-action regression tests. Physical 3-second timing acceptance remains pending.
 
 ## Visible logout control (2026-10-21)
 

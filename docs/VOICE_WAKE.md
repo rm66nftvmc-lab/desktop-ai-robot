@@ -82,5 +82,4 @@
 - Bridge 已恢复双声道模式 3，两路均有信号，实测约 16,039 个处理后采样/秒、CRC 错误 0。已观察到一次 acknowledging→recording→waiting_for_agent→speaking→sent_to_device，实际听感、噪声改善及漏字仍待用户反馈。动画、声线、音量、静音、手机文字不自动播音规则不变。
 ## Physical button shortcut
 
-Firmware 1.63: short press/release starts or finishes manual recording. Hold for approximately 1.2 seconds to open `http://127.0.0.1:8787/` in Microsoft Edge on the connected computer. The hold triggers once and does not toggle recording on release. Bridge must already be running and the device connected; this shortcut does not start a stopped Bridge service or bypass access-key login. Windows' default browser setting is unchanged.
-
+Firmware 1.64: short press/release starts or finishes manual recording. Hold for approximately 3 seconds to open `http://127.0.0.1:8787/` in Microsoft Edge on the connected computer. The hold triggers once and does not toggle recording on release. Bridge must already be running and the device connected; this shortcut does not start a stopped Bridge service or bypass access-key login. Windows' default browser setting is unchanged.

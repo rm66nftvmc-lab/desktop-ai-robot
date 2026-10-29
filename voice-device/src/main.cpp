@@ -599,6 +599,7 @@ static void pollHost() {
 }
 
 static void pollButton() {
+  static constexpr uint32_t HOLD_MS=3000;
   static int lastRaw=HIGH,stable=HIGH;
   static uint32_t changedAt=0,pressedAt=0;
   static bool longSent=false;
@@ -608,11 +609,11 @@ static void pollButton() {
     stable=raw;
     if (stable==LOW) {
       pressedAt=millis(); longSent=false;
-    } else if (!longSent && millis()-pressedAt<1200 && connected && micReady) {
+    } else if (!longSent && millis()-pressedAt<HOLD_MS && connected && micReady) {
       setListening(!listening);
     }
   }
-  if (stable==LOW && raw==LOW && !longSent && millis()-pressedAt>=1200) {
+  if (stable==LOW && raw==LOW && !longSent && millis()-pressedAt>=HOLD_MS) {
     longSent=true;
     if (connected) { const uint8_t action=1; sendFrame(FRAME_OPEN_BRIDGE,&action,1); }
   }
@@ -721,7 +722,7 @@ void loop() {
   if (!connected && millis()-lastHello>=2000) {
     lastHello=millis();
       char hello[256];
-      snprintf(hello,sizeof(hello),"{\"protocol\":1,\"firmware\":\"voice-device-1.63\",\"wake_protocol\":1,\"stereo_protocol\":1,\"display_theme\":%u,\"animation_enabled\":%s,\"boot_animation\":%s,\"pet_action\":%lu,\"pet_frame\":%lu,\"presents\":%lu,\"uptime_ms\":%lu}",
+      snprintf(hello,sizeof(hello),"{\"protocol\":1,\"firmware\":\"voice-device-1.64\",\"wake_protocol\":1,\"stereo_protocol\":1,\"display_theme\":%u,\"animation_enabled\":%s,\"boot_animation\":%s,\"pet_action\":%lu,\"pet_frame\":%lu,\"presents\":%lu,\"uptime_ms\":%lu}",
         displayTheme.load(),animationEnabled?"true":"false",pet::bootGreeting?"true":"false",
         (unsigned long)pet::action.load(),(unsigned long)pet::frame.load(),(unsigned long)lcdPresents.load(),(unsigned long)millis());
       sendJson(FRAME_HELLO,hello);
