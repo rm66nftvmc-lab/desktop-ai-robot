@@ -42,7 +42,7 @@ class DeviceLink:
     MAX_CAPTURE_BYTES = 60 * 16000 * 2
 
     def __init__(self, on_capture=None, on_listen_start=None, *, audio_output=None, on_disconnect=None, network=None,
-                 on_mic_audio=None, on_capture_state=None, on_cancel=None):
+                 on_mic_audio=None, on_capture_state=None, on_cancel=None, on_open_bridge=None):
         self.network = network
         self.audio_output = audio_output if audio_output is not None else AudioOutput()
         self._lock = threading.Lock()
@@ -56,6 +56,7 @@ class DeviceLink:
         self._on_mic_audio = on_mic_audio
         self._on_capture_state = on_capture_state
         self._on_cancel = on_cancel
+        self._on_open_bridge = on_open_bridge
         self._wake_desired = (False, 0)
         self._wake_pending = True
         self._capture_command = None
@@ -329,6 +330,10 @@ class DeviceLink:
         self.set_face(faces.ERROR)
 
     def _handle(self, frame: protocol.Frame, port: serial.Serial, sequence: int) -> int:
+        if frame.kind == protocol.OPEN_BRIDGE:
+            if frame.payload == b'\x01' and self.snapshot()['connected'] and self._on_open_bridge:
+                self._on_open_bridge()
+            return sequence
         if frame.kind in (protocol.STEREO_UP, protocol.STEREO_WAKE):
             state = self.snapshot()
             if not state['connected'] or state.get('stereo_protocol') != 1 or not frame.payload or len(frame.payload) % 4:

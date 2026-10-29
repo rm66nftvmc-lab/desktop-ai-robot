@@ -22,6 +22,7 @@ static constexpr uint8_t FRAME_ANIMATION=13;
 static constexpr uint8_t FRAME_THEME=14, FRAME_SCREEN_TEST=15;
 static constexpr uint8_t FRAME_WAKE_CONFIG=21,FRAME_WAKE_AUDIO=22,FRAME_CAPTURE_CONTROL=23;
 static constexpr uint8_t FRAME_STEREO_UP=24,FRAME_STEREO_WAKE=25;
+static constexpr uint8_t FRAME_OPEN_BRIDGE=26;
 static bool wakeStreaming=false,captureAutomatic=false,captureJustStarted=false;
 static uint8_t microphoneMode=0,microphoneSlot=0;
 static uint32_t microphoneSelectedAt=0;
@@ -599,14 +600,21 @@ static void pollHost() {
 
 static void pollButton() {
   static int lastRaw=HIGH,stable=HIGH;
-  static uint32_t changedAt=0;
+  static uint32_t changedAt=0,pressedAt=0;
+  static bool longSent=false;
   int raw=digitalRead(KEY_PIN);
   if (raw!=lastRaw) {lastRaw=raw;changedAt=millis();}
   if (raw!=stable && millis()-changedAt>=30) {
     stable=raw;
-    if (stable==LOW && connected && micReady) {
+    if (stable==LOW) {
+      pressedAt=millis(); longSent=false;
+    } else if (!longSent && millis()-pressedAt<1200 && connected && micReady) {
       setListening(!listening);
     }
+  }
+  if (stable==LOW && raw==LOW && !longSent && millis()-pressedAt>=1200) {
+    longSent=true;
+    if (connected) { const uint8_t action=1; sendFrame(FRAME_OPEN_BRIDGE,&action,1); }
   }
 }
 
@@ -713,7 +721,7 @@ void loop() {
   if (!connected && millis()-lastHello>=2000) {
     lastHello=millis();
       char hello[256];
-      snprintf(hello,sizeof(hello),"{\"protocol\":1,\"firmware\":\"voice-device-1.62\",\"wake_protocol\":1,\"stereo_protocol\":1,\"display_theme\":%u,\"animation_enabled\":%s,\"boot_animation\":%s,\"pet_action\":%lu,\"pet_frame\":%lu,\"presents\":%lu,\"uptime_ms\":%lu}",
+      snprintf(hello,sizeof(hello),"{\"protocol\":1,\"firmware\":\"voice-device-1.63\",\"wake_protocol\":1,\"stereo_protocol\":1,\"display_theme\":%u,\"animation_enabled\":%s,\"boot_animation\":%s,\"pet_action\":%lu,\"pet_frame\":%lu,\"presents\":%lu,\"uptime_ms\":%lu}",
         displayTheme.load(),animationEnabled?"true":"false",pet::bootGreeting?"true":"false",
         (unsigned long)pet::action.load(),(unsigned long)pet::frame.load(),(unsigned long)lcdPresents.load(),(unsigned long)millis());
       sendJson(FRAME_HELLO,hello);

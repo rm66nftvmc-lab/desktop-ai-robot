@@ -31,6 +31,7 @@ WAKE_AUDIO = 0x16
 CAPTURE_CONTROL = 0x17  # 1 start, 0 finish, 2 cancel; BUTTON confirms the result.
 STEREO_UP = 0x18  # Interleaved PCM16 slots, 16 kHz; only after capability negotiation.
 STEREO_WAKE = 0x19
+OPEN_BRIDGE = 0x1A  # Physical long press: open local Bridge in Edge; never grants access.
 
 
 @dataclass(frozen=True)

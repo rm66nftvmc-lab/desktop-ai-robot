@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .device import DeviceLink
+from .browser import BridgeBrowser
 from .network_device import NetworkDevices
 from .audio_output import AudioOutput
 from .hermes import HermesWorker
@@ -147,7 +148,9 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
         else:
             voice.on_speech_error('请先输入访问密钥登录 Bridge 并选择会话', generation)
 
+    browser = BridgeBrowser('http://127.0.0.1:8787/')
     device = DeviceLink(submit_recording, lambda generation: voice.on_listen_start(generation),
+                        on_open_bridge=browser.open,
                         audio_output=audio_output,
                         on_disconnect=lambda: (voice.on_device_disconnect(), wake.disconnected()), network=network,
                         on_mic_audio=lambda pcm, capture, generation: wake.feed(pcm, capture, generation),
