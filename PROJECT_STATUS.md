@@ -1,6 +1,14 @@
 # Desktop AI Robot project status
 
-Last updated: 2026-10-29
+Last updated: 2026-10-31
+
+## Start a stopped Bridge with the physical button (2026-10-31)
+
+- Firmware 1.65 sends the 3-second hold event even before a Bridge handshake. Short presses still require a connected Bridge and retain manual recording behavior.
+- Added a separate Windows login standby listener. While Bridge is down it reads only USB frames, verifies robot HELLO and CRC, and never sends WELCOME, microphone commands or AI requests. It closes USB before starting the existing anchored-store launcher, waits for health readiness, then opens Edge. While Bridge is running it relinquishes USB and the existing Bridge long-press handler opens the page.
+- Installed per-user startup is reversible with `scripts/install_button_launcher.ps1 -Uninstall`. A Windows named mutex prevents duplicate listeners. Logs rotate at 1 MB with two backups. The listener bypasses proxies only for loopback health probes; the user's network proxy is unchanged.
+- This works with the robot connected to this awake, signed-in Windows computer over native USB. It cannot start an off/sleeping computer, does not implement wireless discovery, and does not grant access-key/voice authorization. Existing Wi-Fi safe mode and all audio/display settings retained.
+- Validation: 213 backend tests passed (one initial transient Windows temp-file replacement denial passed on isolated and full reruns). Firmware 1.65 built and the full 15,923,872-byte application digest matched after 868,352 bytes of differential writes. Per-user login startup installed; independent listener process/log confirmed with Bridge stopped, and a second launch exited without starting a duplicate listener. Physical stopped-Bridge launch test requested, pending.
 
 ## Physical button opens Bridge in Edge (2026-10-29)
 
