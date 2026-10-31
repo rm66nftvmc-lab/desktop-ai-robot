@@ -12,7 +12,7 @@ function logoutHarness(request) {
     return nodes.get(selector);
   };
   const h = vm.createContext({ $:node, request, drafts:new Map([['one','draft']]), draftContext:'one',
-    prompt:{value:'unsent'}, loggedOut:false, showLogin(){ h.loggedOut=true; } });
+    prompt:{value:'unsent'}, loggedOut:false, showLogin(){ h.loggedOut=true; }, renderSpeechCleanup(){} });
   const start = source.indexOf('$("#logout").addEventListener');
   vm.runInContext(source.slice(start, source.indexOf('\nsetTarget();', start)), h);
   return { h, node, click };
@@ -368,4 +368,52 @@ test('background tab pauses periodic reads and foreground return refreshes immed
   assert.deepEqual(calls, []);
   context.document.visibilityState = 'visible'; handlers.get('visibilitychange')();
   assert.deepEqual(calls, ['voice', 'status', 'sessions', 'messages', 'tasks']);
+});
+
+function cleanupHarness(request) {
+  const fs = require('node:fs'), vm = require('node:vm');
+  const code = fs.readFileSync(require.resolve('../app.js'), 'utf8');
+  const nodes = new Map();
+  const node = selector => {
+    if (!nodes.has(selector)) nodes.set(selector, {value:'light', disabled:false, textContent:'', hidden:false});
+    return nodes.get(selector);
+  };
+  const h = vm.createContext({$:node, request, loggedOut:false, showLogin(){h.loggedOut=true;},
+    refreshStatus:async()=>h.renderSpeechCleanup({cleanup_mode:'light'})});
+  const start=code.indexOf('let speechCleanupPending');
+  vm.runInContext(code.slice(start,code.indexOf('async function refreshStatus()',start)),h);
+  const change=code.indexOf('async function changeSpeechCleanup()');
+  vm.runInContext(code.slice(change,code.indexOf('$("#speech-cleanup").addEventListener',change)),h);
+  return {h,node};
+}
+
+test('speech cleanup shows plain-text comparison and keeps selection during save', async()=>{
+  let finish;
+  const {h,node}=cleanupHarness(async(path,options)=>{
+    assert.equal(path,'/api/speech/cleanup');
+    assert.deepEqual(JSON.parse(options.body),{mode:'simplified'});
+    await new Promise(resolve=>finish=resolve);
+  });
+  h.renderSpeechCleanup({cleanup_mode:'light',last_original_text:'<img src=x>',last_text:'简体'});
+  assert.equal(node('#speech-original').textContent,'<img src=x>');
+  assert.equal(node('#speech-review').hidden,false);
+  node('#speech-cleanup').value='simplified';
+  const pending=h.changeSpeechCleanup();
+  h.renderSpeechCleanup({cleanup_mode:'light'});
+  assert.equal(node('#speech-cleanup').value,'simplified');
+  assert.equal(node('#speech-cleanup').disabled,true);
+  finish(); await pending;
+  assert.equal(node('#speech-cleanup').disabled,false);
+  h.renderSpeechCleanup({});
+  assert.equal(node('#speech-review').hidden,true);
+  assert.equal(node('#speech-original').textContent,'');
+});
+
+test('speech cleanup failure remains visible and expired auth returns to login',async()=>{
+  const {h,node}=cleanupHarness(async()=>{throw Object.assign(Error('保存失败'),{status:401});});
+  node('#speech-cleanup').value='simplified';
+  await h.changeSpeechCleanup();
+  assert.equal(h.loggedOut,true);
+  assert.equal(node('#speech-cleanup').value,'light');
+  assert.equal(node('#speech-cleanup-error').textContent,'保存失败');
 });

@@ -2,6 +2,7 @@ fastapi==0.143.0
 uvicorn==0.54.0
 pyserial==3.5
 faster-whisper==1.2.1
+opencc==1.4.2
 av==18.1.0
 comtypes==1.4.17
 kokoro-onnx==0.6.1

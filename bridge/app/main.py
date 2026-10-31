@@ -7,6 +7,7 @@ import subprocess
 import sqlite3
 import threading
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlparse
 from contextlib import asynccontextmanager
 
@@ -91,6 +92,10 @@ class VoiceBody(BaseModel):
     voice: str
 
 
+class SpeechCleanupBody(BaseModel):
+    mode: Literal['light', 'simplified']
+
+
 class WakeBody(BaseModel):
     enabled: bool = Field(strict=True)
     mic_channel: str = Field(default='auto', pattern='^(auto|left|right)$')
@@ -135,6 +140,8 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
     sessions = Sessions(token or load_or_create_token(data_dir))
     message_access = MessageAccess(sessions)
     speech = SpeechWorker(data_dir / "models")
+    cleanup_mode = get_setting(database, 'speech_cleanup')
+    speech.set_cleanup_mode(cleanup_mode if cleanup_mode in ('light', 'simplified') else 'light')
     api_key_file = data_dir / "hermes-api-key.txt"
     api_client = HermesRunsClient(api_key_file) if api_key_file.is_file() else None
     hermes = hermes_worker or HermesWorker(database, api_client=api_client)
@@ -416,6 +423,13 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
     @app.get("/api/transcripts", dependencies=[Depends(require_session)])
     def transcripts() -> dict:
         return {"items": speech.transcripts()}
+
+    @app.post('/api/speech/cleanup', dependencies=[Depends(require_session)])
+    def set_speech_cleanup(body: SpeechCleanupBody, request: Request) -> dict:
+        check_origin(request)
+        set_setting(database, 'speech_cleanup', body.mode)
+        speech.set_cleanup_mode(body.mode)
+        return {'mode': body.mode}
 
     @app.post("/api/tts/stop", dependencies=[Depends(require_session)])
     def stop_speech(body: StopSpeechBody, request: Request) -> dict:

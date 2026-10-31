@@ -209,6 +209,7 @@ p { margin: 0; }
 .audio-controls .muted { font-size: 12px; margin-bottom: 0; }
 .audio-controls .form-error:empty { display: none; }
 .voice-tools-content { padding: 0; }
+.speech-review-text { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow-y: auto; color: var(--muted); }
 .wake-switch { display: flex; align-items: center; gap: 8px; cursor: pointer; }
 .wake-switch input { width: 18px; height: 18px; padding: 0; margin: 0; accent-color: #77b6ff; }
 #display-panel { max-height: calc(var(--app-height, 100dvh) - 100px); overflow-y: auto; }

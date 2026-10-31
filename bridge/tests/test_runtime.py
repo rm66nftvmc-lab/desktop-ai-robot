@@ -114,6 +114,7 @@ def test_diagnostics_requires_auth_and_omits_content_paths_secrets(tmp_path, mon
             'available': True, 'running': False, 'pending': 0,
             'last_error': 'sensitive-error', 'session': {'id': 'sensitive-session'}})
     app.state.speech._status['last_text'] = 'sensitive-transcript'
+    app.state.speech._status['last_original_text'] = 'sensitive-raw-transcript'
     app.state.voice._last_error = 'sensitive-voice-error'
     client = TestClient(app, base_url='http://127.0.0.1')
     assert client.get('/api/diagnostics').status_code == 401

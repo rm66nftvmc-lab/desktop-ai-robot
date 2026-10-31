@@ -85,3 +85,14 @@
 Firmware 1.65: short press/release starts or finishes manual recording when Bridge is connected. Hold for approximately 3 seconds to open `http://127.0.0.1:8787/` in Microsoft Edge on the connected computer. The hold triggers once and does not toggle recording on release. Windows' default browser setting is unchanged.
 
 Install the separate standby listener with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install_button_launcher.ps1`. It runs silently at Windows login and listens only while Bridge is down. On a long press it releases native USB, starts the existing Bridge launcher and waits for health readiness before opening Edge. It never requests microphone audio or calls an agent, and opening the page still requires access-key authorization. The computer must be awake and signed in; this USB shortcut cannot wake an off/sleeping PC or start a server over the currently experimental Wi-Fi connection. Remove both login startup and the running listener with the same script plus `-Uninstall`. Logs are in the anchored private store as `button-launcher.log` (1 MB × 3 total).
+
+
+## 本地语音轻度优化（2026-10-31）
+
+按键录音和唤醒录音都经过同一流程：本地 Whisper 识别 → OpenCC 转简体 → 保守规则清理 → 原有鉴权、当前 AI/会话路由。默认“轻度优化”，可在顶部显示动画/语音面板的“语音优化”改为“仅转简体”；设置保存在本机。手机/电脑打字不经过这一步，原有语音回复自动朗读规则不变。
+
+例如“請幫我，請幫我查天氣”变为“请帮我查天气”；“明天，不对，是后天开会”变为“后天开会”。只处理少量明确的重复起句、日期和相同单位数量改口，不猜测人名、地点或复杂句意。否定句、疑问、强调性重复、数字重复和不确定改口保持原样。引号内文字、代码、URL、Windows 路径原样保留；含这些内容的整句不做改口规则，外部普通文本仍转简体。
+
+展开“最近一次识别对比”可核对原始识别与优化后文字。原始记录仅在进程内存保留最近20条，重启清除，不进入诊断报告；发给智能体的优化后消息仍按原有会话方式保存。退出清空当前页面对比内容。OpenCC缺失时保留原文并显示提示；规则异常退回简体原文，不丢弃识别内容。
+
+依赖已固定在 requirements.txt 的 opencc==1.4.2，启动时预热字典，无新增大模型/API等待。244项后端与23项网页测试通过；本机2000次短句预热测试的中位处理时间0.006毫秒、95分位0.007毫秒，仅代表优化层，不包含Whisper识别或AI回答时间。实际口音和口误效果仍应通过原文对比核验。

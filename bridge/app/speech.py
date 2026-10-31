@@ -5,6 +5,7 @@ import queue
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
+from .speech_cleanup import SpeechCleanup
 
 
 class SpeechWorker:
@@ -17,6 +18,14 @@ class SpeechWorker:
         self._lock = threading.Lock()
         self._status = {"state": "idle", "last_error": None, "last_text": None}
         self._transcripts: list[dict] = []
+        self.cleanup = SpeechCleanup()
+        self._status.update(cleanup_mode='light', cleanup_ms=0, cleanup_warning=None, last_original_text=None)
+
+    def set_cleanup_mode(self, mode):
+        if mode not in ('light', 'simplified'):
+            raise ValueError('Invalid cleanup mode')
+        with self._lock:
+            self._status['cleanup_mode'] = mode
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -64,6 +73,10 @@ class SpeechWorker:
 
     def _run(self) -> None:
         try:
+            self.cleanup.prepare()  # Load local dictionaries before the first capture.
+        except Exception:
+            pass  # Cleanup reports a warning and preserves text if unavailable.
+        try:
             model = self._load_model()  # Preload locally before the first user recording.
         except Exception:
             model = None  # A real recording still gets the normal actionable error.
@@ -85,13 +98,20 @@ class SpeechWorker:
                     io.BytesIO(wav), language="zh", beam_size=5,
                     vad_filter=True, condition_on_previous_text=False,
                 )
-                text = "".join(segment.text for segment in segments).strip()
+                original = "".join(segment.text for segment in segments).strip()
+                result = self.cleanup.process(original, self.snapshot()['cleanup_mode'])
+                text = result.text
                 with self._lock:
-                    self._status.update(state="idle", last_text=text)
+                    self._status.update(state="idle", last_text=text, last_original_text=original,
+                                        cleanup_ms=result.elapsed_ms, cleanup_warning=result.warning)
                     if text:
                         self._transcripts.append({
                             "id": len(self._transcripts) + 1,
                             "text": text,
+                            "original_text": original,
+                            "simplified_text": result.simplified,
+                            "cleanup_changes": list(result.changes),
+                            "cleanup_ms": result.elapsed_ms,
                             "created_at": datetime.now(timezone.utc).isoformat(),
                         })
                         self._transcripts[:] = self._transcripts[-20:]

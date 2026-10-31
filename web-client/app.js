@@ -722,6 +722,17 @@ function updateDevice(link) {
 
 }
 
+let speechCleanupPending = false;
+let speechCleanupError = "";
+function renderSpeechCleanup(speech) {
+  if (!speech) return;
+  if (!speechCleanupPending) $("#speech-cleanup").value = speech.cleanup_mode || "light";
+  $("#speech-cleanup-error").textContent = speechCleanupError || speech.cleanup_warning || "";
+  $("#speech-review").hidden = !speech.last_original_text;
+  $("#speech-original").textContent = speech.last_original_text || "";
+  $("#speech-cleaned").textContent = speech.last_text || "";
+}
+
 async function refreshStatus() {
   if (statusLoading) return false;
   statusLoading = true;
@@ -730,6 +741,7 @@ async function refreshStatus() {
     const status = await request("/api/status");
     showWorkspace();
     updateDevice(status.device);
+    renderSpeechCleanup(status.speech);
     if (!wakePending && status.wake) {
       $("#wake-enabled").checked = status.wake.enabled;
       $("#wake-channel").value = status.wake.mic_channel;
@@ -1014,6 +1026,26 @@ async function changeWakeSettings() {
 $("#wake-enabled").addEventListener("change", changeWakeSettings);
 $("#wake-channel").addEventListener("change", changeWakeSettings);
 
+async function changeSpeechCleanup() {
+  if (speechCleanupPending) return;
+  speechCleanupPending = true;
+  const select = $("#speech-cleanup");
+  select.disabled = true;
+  speechCleanupError = "";
+  try {
+    await request("/api/speech/cleanup", { method: "POST", body: JSON.stringify({mode: select.value}) });
+  } catch (error) {
+    speechCleanupError = error.message;
+    if (error.status === 401) showLogin();
+  } finally {
+    speechCleanupPending = false;
+    select.disabled = false;
+    $("#speech-cleanup-error").textContent = speechCleanupError;
+    await refreshStatus();
+  }
+}
+$("#speech-cleanup").addEventListener("change", changeSpeechCleanup);
+
 $("#display-theme").addEventListener("change", async (event) => {
   displayPending = true;
   event.target.disabled = true;
@@ -1080,6 +1112,7 @@ $("#logout").addEventListener("click", async () => {
     try { await request("/api/logout", { method: "POST" }); }
     catch (error) { if (error.status !== 401) throw error; }
     drafts.clear(); draftContext = null; prompt.value = ""; $("#key").value = ""; showLogin();
+    renderSpeechCleanup({});
     $("#key").focus();
   } catch (error) {
     $("#send-error").textContent = "退出未确认，请重试。" + error.message;

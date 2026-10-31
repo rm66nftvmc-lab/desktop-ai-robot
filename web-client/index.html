@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>桌面 AI 机器人 · Bridge</title>
-  <link rel="stylesheet" href="/assets/style.css?v=25">
+  <link rel="stylesheet" href="/assets/style.css?v=26">
 </head>
 <body>
   <section id="login" class="login-screen">
@@ -96,6 +96,14 @@
               <label for="wake-channel">麦克风声道</label>
               <select id="wake-channel"><option value="auto">自动选择</option><option value="left">左声道</option><option value="right">右声道</option></select>
               <p id="wake-error" class="form-error" role="alert"></p>
+              <label for="speech-cleanup">语音优化</label>
+              <select id="speech-cleanup"><option value="light">轻度优化（推荐）</option><option value="simplified">仅转简体</option></select>
+              <p id="speech-cleanup-error" class="form-error" role="alert"></p>
+              <details id="speech-review" hidden>
+                <summary>最近一次识别对比</summary>
+                <p>原始识别</p><p id="speech-original" class="speech-review-text"></p>
+                <p>优化后</p><p id="speech-cleaned" class="speech-review-text"></p>
+              </details>
               <form id="tts-form" class="stack-form">
                 <div id="voice-presets" class="stack-form">
                   <label for="voice-test-language">试听语言</label>
@@ -152,6 +160,6 @@
     </main>
   </div>
   <script src="/assets/ui-state.js?v=2" defer></script>
-  <script src="/assets/app.js?v=33" defer></script>
+  <script src="/assets/app.js?v=34" defer></script>
 </body>
 </html>
